@@ -1,5 +1,3 @@
-
-
 #######################################################################################################################-
 # Libraries + Parallel Processing Start ----
 #######################################################################################################################-
@@ -16,7 +14,7 @@ library(lubridate)
 library(bindrcpp)
 library(magrittr)
 
-# library(doParallel)
+library(doParallel)
 # 
 library(corrplot)
 library(vcd)
@@ -27,10 +25,10 @@ library(gridExtra)
 # library(htmlwidgets)
 # library(rgl)
 # 
- library(caret)
-# library(xgboost)
+library(caret)
+library(xgboost)
 # library(glmnet)
-# library(ROCR)
+library(ROCR)
 
 
 #######################################################################################################################-
@@ -80,8 +78,23 @@ grid.draw.arrangelist <- function(x, ...) {
   }
 }
 
-
-
+## Summary function for classification performance
+my_twoClassSummary = function (data, lev = NULL, model = NULL) 
+{
+  # Get y and yhat
+  y = data$obs
+  yhat = data[[levels(y)[[2]]]]
+  
+  conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
+  accuracy = as.numeric(conf_obj$overall["Accuracy"])
+  missclassification = 1 - accuracy
+  
+  pred_obj = ROCR::prediction(yhat, y)
+  auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
+  
+  out = c("auc" = auc, "accuracy" = accuracy, "missclassification" = missclassification)
+  out
+}
 
 ## Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
@@ -108,6 +121,7 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
       geom_density(aes_string(color = target_name)) +
       scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
       scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
+      #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
       labs(title = paste0(.x," (VI: ", round(varimp[.x],2),")"),
            x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
     
@@ -195,7 +209,6 @@ get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "ta
 }
 
 
-
 ## Get plot list of nomial variables vs classification target 
 get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "target",  
                                      color = twocol) {
@@ -213,8 +226,8 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
     print(.x)
     
     # Proportion of Target=Y (height of bars) and relative frequency of levels (width of bars)
+    df.plot$target_num = ifelse(df.plot[[target_name]] == levs_target[2], 1, 0)
     df.ggplot = df.plot %>% 
-      mutate_(target_num = paste0("ifelse(",target_name," == levs_target[2], 1, 0)")) %>% 
       group_by_(.x) %>% 
       summarise(n = n(), prob = mean(target_num)) %>%
       ungroup() %>% 
@@ -235,7 +248,6 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
   })
   plots
 }
-
 
 
 ## Get plot list of nomial variables vs regression target 
@@ -281,11 +293,6 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
   })
   plots
 }
-
-
-
-
-
 
 
 ## Get plot list of correlations of variables
@@ -356,23 +363,50 @@ get_plot_corr <- function(outpdf, df.plot = df, input_type = "metr" , vars = met
 }
 
 
-
-## ROC, Calibration, Gain, Lift, Confusion
-plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", colors = twocol,
-                            ncols = 4, nrows = 2, w = 18, h = 12) {
+## Get plot list  for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
+get_plot_performance = function(yhat, y, reduce = NULL, color = "blue", colors = twocol) {
   
-  # Prepare
-  df.distr = data.frame(y = y_holdout, yhat = yhat_holdout)
-  pred_obj = prediction(yhat_holdout, y_holdout)
+  ## Prepare "direct" information (confusion, distribution, calibration)
+  conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
+  df.confu = as.data.frame(conf_obj$table)
+  df.distr = data.frame(y = y, yhat = yhat)
+  df.calib = calibration(y~yhat, data.frame(y = y, yhat = 1 - yhat), cuts = 5)$data
+
+  
+  
+  ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
+  # Create performance objects
+  pred_obj = prediction(yhat, y)
   auc = performance(pred_obj, "auc" )@y.values[[1]]
   tprfpr = performance( pred_obj, "tpr", "fpr")
-  df.roc = data.frame("fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]])
-  i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .)))
   precrec = performance( pred_obj, "ppv", "rec")
+  help_gain = ifelse(y == "Y", 1, 0)[order(yhat, decreasing = TRUE)] 
+  df.gainlift = data.frame("x" = 100*(1:length(yhat))/length(yhat),
+                           "gain" = 100*cumsum(help_gain)/sum(help_gain)) %>% 
+    mutate(lift = gain / x)
+  
+  # Thin out reducable objects (for big test data as this reduces plot size)
+  if (!is.null(reduce)) {
+    set.seed(123)
+    i.reduce = sample(1:length(yhat), floor(reduce * length(yhat)))
+    i.reduce = i.reduce[order(i.reduce)]
+    for (type in c("x.values","y.values","alpha.values")) {
+      slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
+      slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
+    }
+    df.gainlift = df.gainlift[i.reduce,]
+  } 
+  
+  # Collect information of reduced information into data frames
+  df.roc = data.frame("fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]])
+  i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .))) #cutoff values
   df.precrec = data.frame("rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
                           x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
-  df.precrec[is.nan(df.precrec$prec),"prec"] = 1
+  df.precrec[is.nan(df.precrec$prec),"prec"] = 1 #adapt first value
   
+
+  
+  ## Plots
   # ROC
   p_roc = ggplot(df.roc, aes(x = fpr, y = tpr)) +
     geom_line(color = "blue", size = .5) +
@@ -380,19 +414,28 @@ plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", col
     geom_point(aes(fpr, tpr), data = df.roc[i.alpha,], color = "red", size = 0.8) +
     scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
     scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
-    
-    labs(title = paste0("ROC (auc=", round(auc,3), ")"), x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
+    labs(title = paste0("ROC (auc=", round(auc,3), ")"), 
+         x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
          y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
-    #geom_label(data = data.frame(x = 0.9, y = 0.1, text = paste0("AUC: ",round(auc,3))), aes(x = x, y = y, label = text)) +
+    theme_my 
+  
+  # Condusion Matrix
+  p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
+    geom_tile(aes(fill = Freq)) + 
+    geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low = "white", high = "blue") +
+    scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
+    labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
     theme_my 
   
   # Stratified distribution of predictions (plot similar to plot_distr_metr)
-  p_distr = ggplot(data = df.distr, aes_string("yhat")) +
+  p_distr = ggplot(data = df.distr, aes(x = yhat)) +
     geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
     geom_density(aes(color = y)) +
     scale_fill_manual(values = alpha(colors, .2), name = "Target (y)") + 
     scale_color_manual(values = colors, name = "Target (y)") +
-    labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
+    labs(title = "Predictions", 
+         x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
     guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
   tmp = ggplot_build(p_distr)
   p.inner = ggplot(data = df.distr, aes_string("y", "yhat")) +
@@ -407,27 +450,21 @@ plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", col
     theme_my +
     annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
   
-  # Gain + Lift: NOT CORRECT for all data due to undersampling -> need to oversample positives (y_holdout) and ...  
-  # ... adapt predictions (yhat_holdout)
-  tmp = ifelse(y_holdout == "Y", 1, 0)[order(yhat_holdout, decreasing = TRUE)] 
-  df.gain = data.frame("x" = 100*(1:length(yhat_holdout))/length(yhat_holdout),
-                       "gain" = 100*cumsum(tmp)/sum(tmp))
-  df.gain$lift = df.gain$gain/df.gain$x  
-  p_gain = ggplot(df.gain) +
-    geom_polygon(aes(x, y), data.frame(x = c(0,100,100*sum(tmp)/length(tmp)), y = c(0,100,100)), 
+  # Gain + Lift
+  p_gain = ggplot(df.gainlift) +
+    geom_polygon(aes(x, y), data.frame(x = c(0,100,100*sum(help_gain)/length(help_gain)), y = c(0,100,100)), 
                  fill = "grey90", alpha = 0.5) +
-    geom_line(aes(x, gain), df.gain, color = "blue", size = .5) +
+    geom_line(aes(x, gain), df.gainlift, color = "blue", size = .5) +
     scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
     labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
     theme_my 
-  p_lift = ggplot(df.gain) +
-    geom_line(aes(x, lift), df.gain, color = "blue", size = .5) +
+  p_lift = ggplot(df.gainlift) +
+    geom_line(aes(x, lift), color = "blue", size = .5) +
     scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
     labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
     theme_my 
   
-  # Calibrate:  CORRECT also for all data as invariant to undersampling 
-  df.calib = calibration(y~yhat, data.frame(y = y_holdout, yhat = 1 - yhat_holdout), cuts = 5)$data
+  # Calibrate
   p_calib = ggplot(df.calib, aes(midpoint, Percent)) +
     geom_line(color = "blue") +
     geom_point(color = "blue") +  
@@ -437,8 +474,7 @@ plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", col
     labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
     theme_my 
   
-  # Precision Recall: NOT CORRECT for all data due to undersampling -> need to oversample positives (y_holdout) and ...  
-  # ... adapt predictions (yhat_holdout)
+  # Precision Recall
   p_precrec = ggplot(df.precrec, aes(rec, prec)) +
     geom_line(color = "blue", size = .5) +
     geom_point(aes(x = ), df.precrec[i.alpha,], color = "red", size = 0.8) +
@@ -446,6 +482,8 @@ plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", col
     labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
          y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
     theme_my 
+  
+  # Precision
   p_prec = ggplot(df.precrec, aes(x, prec)) +
     geom_line(color = "blue", size = .5) +
     geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
@@ -454,30 +492,100 @@ plot_performance = function(outpdf, yhat_holdout, y_holdout, color = "blue", col
          y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
     theme_my
   
-  # Condusion Matrix: NOT CORRECT for all data due to undersampling
-  conf_obj = confusionMatrix(ifelse(yhat_holdout > 0.5,"Y","N"), y_holdout)
-  df.confu = as.data.frame(conf_obj$table)
-  p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
-    geom_tile(aes(fill = Freq)) + 
-    geom_text(aes(label = Freq)) +
-    scale_fill_gradient(low = "white", high = "blue") +
-    scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
-    labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
-    theme_my 
+  
+  
+  ## Collect Plots and return
+  plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
+               p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
+  plots
+}
 
+
+
+## Variable importance by permutation argument 
+get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, predictors,
+                                     vars = predictors) {
+  
+  #browser()
+  # Original performance
+  perf_orig = my_twoClassSummary(data.frame(
+    obs = df.for_varimp$target, 
+    predict(fit.for_varimp, df.for_varimp[predictors], type = "prob")["Y"]))["auc"]
+
+  # Permute
+  set.seed(999)
+  i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
+  start = Sys.time()
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
+                      .export = "my_twoClassSummary") %dopar% {
+    #i=1
+    df.tmp = df.for_varimp
+    df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
+    yhat = predict(fit.for_varimp, df.tmp[predictors], type="prob")["Y"]  #predict
+    perf = my_twoClassSummary(cbind(obs = df.for_varimp$target, yhat))["auc"]  #performance
+    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+  }
+  print(Sys.time() - start)
+  # Calculate importance as scaled performance difference
+  df.varimp = df.varimp %>%
+    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
+    arrange(desc(importance))
+  df.varimp 
+}
+
+
+
+## Get plot list for variable importance
+get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue","orange","red"), 
+                           df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
+  # Subset
+  df.ggplot = df.plot %>% filter(variable %in% vars)
+  
   # Plot
-  plots = list(p_roc, p_confu, p_distr, p_calib, p_gain, p_lift, p_precrec, p_prec)
-  ggsave(outpdf, marrangeGrob(plots, ncol = ncols, nrow = nrows, top = NULL), width = w, height = h)
+  plot = ggplot(df.ggplot) +
+    geom_bar(aes(x = reorder(variable, importance), y = importance, fill = color), stat = "identity") +
+    scale_fill_manual(values = col) +
+    labs(title = paste0("Top ", min(length(vars), length(predictors))," Important Variables (of ", 
+                        length(predictors), ")"), 
+         x = "", y = "Importance (scaled to 100)") +
+    coord_flip() +
+    guides(fill = guide_legend(reverse = TRUE, title = "")) +
+    theme_my   
+  
+  # Add boostrap information
+  if (!is.null(df.plot_boot)) {
+    # Add bootstrap lines
+    if (bootstrap_lines == TRUE) {
+      plot = plot +
+        geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.plot_boot, 
+                  color = "grey", size = 0.1) +
+        geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.plot_boot, 
+                   color = "black", size = 0.3) 
+    }
+    
+    # Add bootstrap Confidence Intervals
+    if (bootstrap_CI == TRUE) {
+      # Calculate confidence intervals
+      df.help = df.plot_boot %>% 
+        group_by(variable) %>% 
+        summarise(sd = sd(importance)) %>% 
+        left_join(select(df.ggplot, variable, importance)) %>% 
+        mutate(lci = importance - 1.96*sd, rci = importance + 1.96*sd)
+      plot = plot +
+        geom_errorbar(aes(x = variable, ymin = lci, ymax = rci), data = df.help, size = 0.5, width = 0.25)
+    }
+  }
+  plot
 }
 
 
 
 ## Variable Importance
-plot_variableimportance = function(outpdf, vars, fit = fit.gbm, l.boot = NULL, 
+plot_variableimportance = function(outpdf, vars, fit.plot = fit, l.boot = NULL, 
                                    ncols = 5, nrows = 2, w = 18, h = 12) {
   # Group importances
-  df.tmp = varImp(fit)$importance %>% 
-    mutate(variable = rownames(varImp(fit)$importance)) %>% 
+  df.tmp = varImp(fit.plot)$importance %>% 
+    mutate(variable = rownames(varImp(fit.plot)$importance)) %>% 
     filter(variable %in% vars) %>% 
     arrange(desc(Overall)) %>% 
     mutate(color = cut(Overall, c(-1,10,50,100), labels = c("low","middle","high"))) 
@@ -488,7 +596,7 @@ plot_variableimportance = function(outpdf, vars, fit = fit.gbm, l.boot = NULL,
     scale_x_discrete(limits = rev(df.tmp$variable)) +
     scale_fill_manual(values = c("blue","orange","red")) +
     labs(title = paste0("Top ", min(topn, length(predictors))," Important Variables (of ", length(predictors), ")"), 
-         x = "", y = "") +
+         x = "", y = "Importance (scaled to 100)") +
     coord_flip() +
     #geom_hline(yintercept = c(10,50), color = "grey", linetype = 2) +
     theme_my + theme(legend.position = "none")
