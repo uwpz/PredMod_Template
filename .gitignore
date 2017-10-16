@@ -2,8 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
-*.Rproj
-bigdata
+bigdata/*
 !bigdata/.keep
-output
+output/*
 !output/.keep
