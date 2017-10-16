@@ -3,6 +3,4 @@
 .RData
 .Ruserdata
 bigdata/*
-!bigdata/.keep
 output/*
-!output/.keep
