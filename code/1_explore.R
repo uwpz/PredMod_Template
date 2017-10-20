@@ -8,11 +8,13 @@ source("./code/0_init.R")
 
 
 
+
 #######################################################################################################################-
 #|||| ETL ||||----
 #######################################################################################################################-
 
-#### Read data ####
+# Read data --------------------------------------------------------------------------------------------------------
+
 df.orig = read_csv(paste0(dataloc,"thyroid.csv"), col_names = TRUE)
 skip = function() {
   # Check some stuff
@@ -26,7 +28,9 @@ df = df.orig
 
 
 
-#### Define target and train/test-fold ###
+
+# Define target and train/test-fold ----------------------------------------------------------------------------------
+
 # Target
 df = mutate(df, target = factor(ifelse(Class == "negative", "N", "Y"), levels = c("N","Y")),
                 target_num = ifelse(target == "N", 0 ,1))
@@ -41,18 +45,22 @@ summary(df$fold)
 
 
 
+
 #######################################################################################################################-
 #|||| Metric variables: Explore and adapt ||||----
 #######################################################################################################################-
 
-#### Define metric covariates ####
+# Define metric covariates -------------------------------------------------------------------------------------
+
 metr = c("age","TSH","T3","TT4","T4U","FTI") # NOT USED: "TBG" -> only missings
 #metr = c("age","TSH","TT4","T4U","FTI") #for regression
 summary(df[metr]) 
 
 
 
-#### Create nominal variables for all metric variables (for glmnet) before imputing####
+
+# Create nominal variables for all metric variables (for glmnet) before imputing -------------------------------
+
 metr_binned = paste0(metr,"_BINNED_")
 df[metr_binned] = map(df[metr], ~ {
   cut(., unique(quantile(., seq(0,1,0.1), na.rm = TRUE)), include.lowest = TRUE)
@@ -62,7 +70,8 @@ df[metr_binned] = map(df[metr_binned], ~ fct_explicit_na(., na_level = "(Missing
 
 
 
-#### Handling missings ####
+
+# Handling missings ----------------------------------------------------------------------------------------------
 
 # Remove covariates with too many missings from metr 
 misspct = map_dbl(df[metr], ~ round(sum(is.na(.)/nrow(df)), 3)) #misssing percentage
@@ -90,7 +99,7 @@ summary(df[metr])
 
 
 
-#### Outliers + Skewness ####
+# Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
 plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
@@ -124,7 +133,7 @@ ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nr
 
 
 
-#### Removing variables ####
+# Removing variables -------------------------------------------------------------------------------------------
 
 # Remove Self predictors
 metr = setdiff(metr, "T3")
@@ -143,7 +152,8 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 #|||| Nominal variables: Explore and adapt ||||----
 #######################################################################################################################-
 
-#### Define nominal covariates ####
+# Define nominal covariates -------------------------------------------------------------------------------------
+
 nomi = c("sex","on_thyroxine","query_on_thyroxine","on_antithyroid_medication","sick","pregnant","thyroid_surgery",
          "I131_treatment","query_hypothyroid","query_hyperthyroid","lithium","goitre","tumor","hypopituitary",
          "psych","referral_source")  # NOT USED: "Class" -> its the target
@@ -154,7 +164,8 @@ summary(df[nomi])
 
 
 
-#### Handling factor values ####
+
+# Handling factor values ----------------------------------------------------------------------------------------------
 
 # Convert missings to own level ("(Missing)")
 df[nomi] = map(df[nomi], ~ fct_explicit_na(.))
@@ -178,7 +189,8 @@ ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3
 
 
 
-#### Removing variables ####
+# Removing variables ----------------------------------------------------------------------------------------------
+
 # Remove Self-predictors
 nomi = setdiff(nomi, "xxx")
 
@@ -189,11 +201,13 @@ nomi = setdiff(nomi, "MISS_FTI")
 
 
 
+
 #######################################################################################################################-
 #|||| Prepare final data ||||----
 #######################################################################################################################-
 
-#### Define final predictors ####
+# Define final predictors ----------------------------------------------------------------------------------------
+
 predictors = c(metr, nomi)
 formula = as.formula(paste("target", "~", paste(predictors, collapse = " + ")))
 predictors_glmnet = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
@@ -207,7 +221,9 @@ setdiff(predictors_glmnet, colnames(df))
 
 
 
-#### Save image ####
+
+# Save image ----------------------------------------------------------------------------------------------------------
+
 save.image("1_explore.rdata")
 
 

@@ -7,9 +7,6 @@
 load("1_explore.rdata")
 source("./code/0_init.R")
 
-# Do not bootstrap per default
-l.boot = NULL
-
 
 
 #### Initialize parallel processing ####
@@ -20,7 +17,9 @@ registerDoParallel(cl)
 
 
 
-#### Undersample data ####
+
+# Undersample data --------------------------------------------------------------------------------------------
+
 # Just take data from train fold
 summary(df[df$fold == "train", "target"])
 df.train = c()
@@ -44,11 +43,12 @@ df.test = df %>% filter(fold == "test")
 
 
 
+
 #######################################################################################################################-
 #|||| Performance ||||----
 #######################################################################################################################-
 
-#### Do the full fit and predict on test data ####
+#---- Do the full fit and predict on test data -------------------------------------------------------------------
 
 ## Fit
 tmp = Sys.time()
@@ -87,8 +87,10 @@ ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 
 
 
 
-#### Do some bootstrapped fits ####
-n.boot = 20
+
+#---- Do some bootstrapped fits ----------------------------------------------------------------------------------
+
+n.boot = 5
 l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dopar% { 
   
   # Bootstrap
@@ -122,23 +124,18 @@ map_dbl(1:n.boot, ~ performance(prediction(predict( l.boot[[paste0("fit_",.)]], 
 #|||| Variable Importance ||||----
 #######################################################################################################################-
 
-#### Default Variable Importance: uses gain sum of all trees ####
+#--- Default Variable Importance: uses gain sum of all trees ---------------------------------------------------------
+
 # Default plot 
 plot(varImp(fit)) 
 
-# Variable importance only for topn important variables 
-topn = 10
-(topn_varimp = rownames(varImp(fit)$importance)[order(varImp(fit)$importance, decreasing = TRUE)][1:topn])
-plot_variableimportance(paste0(plotloc, "variableimportance.pdf"), fit.plot = fit, vars = topn_varimp, 
-                        l.boot = l.boot[grep("fit", names(l.boot))],
-                        w = 18, h = 12)
 
 
 
-#### Variable Importance by permuation argument ####
+#--- Variable Importance by permuation argument -------------------------------------------------------------------
 
 ## Importance for "total" fit
-df.varimp = get_varimp_by_permutation(df.test, fit, predictors = predictors, vars = predictors)
+df.varimp = get_varimp_by_permutation(df.test, fit, predictors, vars = predictors)
 
 # Visual check how many variables needed 
 ggplot(df.varimp) + 
@@ -179,44 +176,36 @@ ggsave(paste0(plotloc, "variable_importance.pdf"), plot, w = 8, h = 6)
 #######################################################################################################################-
 
 
-# ## Partial dependence (only for gbm)
-# # Default plots
-# plot(fit.gbm$finalModel, i.var = "age", type = "link") #-> shows 1-P(target="Y") !!!
-# plot(fit.gbm$finalModel, i.var = 7, type = "response") 
-# 
-# # Partial dependence only for topn important variables 
-# topn = 10
-# (topn_varimp = rownames(varImp(fit.gbm)$importance)[order(varImp(fit.gbm)$importance, decreasing = TRUE)][1:topn])
-# plot_partialdependence("./output/partialdependance_gbm.pdf", vars = topn_varimp, 
-#                        CI = TRUE,
-#                        ylim = c(0,0.3), ncols = 5, nrows = 2, w = 18, h = 12)
+## Partial depdendance for "total" fit 
+levs = map(df.test[nomi], ~ levels(.))
+quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
+df.partialdep = get_partialdep(df.test, fit, predictors, topn_vars, levs = levs, quantiles = quantiles)
+
+# Visual check whether all fits 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,0.2))
+ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+       w = 18, h = 12)
 
 
 
-# Partial dependance on green field
-start = Sys.time()
-df.pd = foreach (i = 1:length(topn_varimp), .combine = bind_rows) %do% {
-  #i=2
-  df.res = c()
-  df.tmp = df.train
-  
-  # Loop over levels for nominal covariables or quantiles for metric covariables
-  for (value in if(is.factor(df.train[[topn_varimp[i]]])) levels(df.train[[topn_varimp[i]]]) else 
-                                                              quantile(df.train[[topn_varimp[i]]], seq(0,1,0.05)) ) {
-    #value = levels(df.train[[topn_varimp[i]]])[1]
-    print(value)
-    df.tmp[,topn_varimp[i]] = if(is.factor(df.train[[topn_varimp[i]]])) 
-      factor(value, levels = levels(df.tmp[,topn_varimp[i]])) else value
-    summary(df.tmp[,topn_varimp[i]])
-    yhat = prob_samp2full(predict(fit.gbm, df.tmp[c("INT",predictors)], type="prob")[[2]], b_sample, b_all)
-    df.res = rbind(df.res, data.frame(Variable = topn_varimp[i], 
-                                      Value = as.character(value), Probability = mean(yhat), stringsAsFactors = FALSE))
-  }
-  df.res
+## Importance for bootstrapped models (and bootstrapped data) 
+# Get boostrap values
+df.partialdep_boot = c()
+for (i in 1:n.boot) {
+  set.seed(i*1234)
+  df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
+  #df.test_boot = df.test
+  df.partialdep_boot %<>% 
+    bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], predictors, topn_vars, levs, quantiles) %>% 
+                mutate(run = i))
 }
-Sys.time() - start
-plot_partialdependence_NEW(paste0("./output/partialdependance.pdf"), vars = topn_varimp, l.boot = l.boot, 
-                           ylim = c(0,0.3), ncols = 5, nrows = 2, w = 18, h = 12)
+
+
+
+## Plot
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,0.2))
+ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+       w = 18, h = 12)
 
 
 
