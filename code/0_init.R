@@ -1,3 +1,8 @@
+
+#TODO: 
+# residual check
+# 90%train-importance model
+
 #######################################################################################################################-
 # Libraries + Parallel Processing Start ----
 #######################################################################################################################-
@@ -30,6 +35,10 @@ library(xgboost)
 # library(glmnet)
 library(ROCR)
 
+#library(devtools) 
+#install_github("AppliedDataSciencePartners/xgboostExplainer")
+library(xgboostExplainer)
+
 
 #######################################################################################################################-
 # Parameters ----
@@ -58,6 +67,168 @@ theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
 
 
 #######################################################################################################################-
+# Caret definition of MicrosofMl algorithms ----
+#######################################################################################################################-
+
+## rxFastTrees (boosted trees)
+ms_boosttree = list()
+ms_boosttree$label = "MicrosoftML rxFastTrees"
+ms_boosttree$library = "MicrosoftML"
+ms_boosttree$type = c("Regression","Classification")
+ms_boosttree$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE, 
+             text = "parameter,class,label
+             numTrees,numeric,Boosting Interations
+             numLeaves,numeric,Number of Leaves
+             minSplit,numeric,Min Number for a leaf
+             learningRate,numeric,Shrinkage
+             featureFraction,numeric,features per tree
+             exampleFraction,numeric,rows per tree"                             
+  )
+
+ms_boosttree$grid = function(x, y, len = NULL, search = "grid") {
+  if (search == "grid") {
+    out <- expand.grid(numTrees = floor((1:len) * 50),
+                       numLeaves = 2^seq(1, len),
+                       minSplit = 10,
+                       learningRate = .1,
+                       featureFraction = 0.7,
+                       exampleFraction = 0.7)
+  } else {
+    out <- data.frame(numTrees = floor(runif(len, min = 10, max = 5000)),
+                      numLeaves = 2 ^ sample(1:6, replace = TRUE, size = len), 
+                      minSplit = 2 ^ sample(0:6, replace = TRUE, size = len),
+                      learningRate = runif(len, min = .001, max = .6),
+                      featureFraction = runif(len, min = .1, max = 1),
+                      exampleFraction = runif(len, min = .1, max = 1)) 
+    out <- out[!duplicated(out),]
+  }
+  out
+}
+
+ms_boosttree$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
+  #browser()
+  theDots = list(...)
+  #if (is.factor(y) && length(lev) == 2) {y = ifelse(y == lev[1], 1, 0)}
+  #y = factor(y, levels = c(1,0))
+  #x = as.matrix(x)
+  if (is.factor(y)) type = "binary" else type = "regression"
+  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
+                  data = cbind(x, y),
+                  numTrees = param$numTrees,
+                  numLeaves = param$numLeaves,
+                  minSplit = param$minSplit,
+                  learningRate = param$learningRate,
+                  featureFraction = param$featureFraction,
+                  exampleFraction = param$exampleFraction,
+                  type = type)
+  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
+  do.call("rxFastTrees", modArgs)
+}
+
+ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if(modelFit$problemType == "Classification") {
+    out = rxPredict(modelFit, newdata)$Probability.Y
+  } else {
+    newdata$y = NA
+    out = rxPredict(modelFit, newdata)$Score
+  }
+  if (length(modelFit$obsLevels) == 2) {
+    out <- ifelse(out >= 0.5, "Y", "N")
+  }
+  out
+}
+
+ms_boosttree$prob = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  if (length(modelFit$obsLevels) == 2) {
+    out <- cbind(out, 1-out)
+    colnames(out) <- c("Y","N")
+  }
+  out
+}
+
+ms_boosttree$levels = function(x) {c("N","Y")}
+
+ms_boosttree$sort = function(x) {
+  x[order(x$numTrees, x$numLeaves, x$learningRate), ]
+}
+
+
+
+
+## rxForest (random Forest)
+ms_forest = list()
+ms_forest$label = "MicrosoftML rxFastForest"
+ms_forest$library = "MicrosoftML"
+ms_forest$type = c("Regression","Classification")
+ms_forest$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE,
+             text = "parameter,class,label
+             numTrees,numeric,Number of Trees
+             splitFraction,numeric,Fraction of features in split"
+  )
+
+ms_forest$grid = function(x, y, len = NULL, search = "grid") {
+  if (search == "grid") {
+    out <- expand.grid(numTrees = floor((1:len) * 50),
+                       splitFraction = seq(0.01, 1, length.out = len))
+  } else {
+    out <- data.frame(numTrees = floor(runif(len, min = 1, max = 5000)),
+                      splitFraction = runif(len, min = 0.01, max = 1))
+    out <- out[!duplicated(out),]
+  }
+  out
+}
+
+ms_forest$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
+  theDots = list(...)
+  if (is.factor(y)) type = "binary" else type = "regression"
+  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
+                  data = cbind(x, y),
+                  numTrees = param$numTrees,
+                  splitFraction = param$splitFraction,
+                  type = type)
+  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
+  do.call("rxFastForest", modArgs)
+}
+
+ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if(modelFit$problemType == "Classification") {
+    out = rxPredict(modelFit, newdata)$Probability.Y
+  } else {
+    newdata$y = NA
+    out = rxPredict(modelFit, newdata)$Score
+  }
+  if (length(modelFit$obsLevels) == 2) {
+    out <- ifelse(out >= 0.5, "Y", "N")
+  }
+  out
+}
+
+ms_forest$prob = function(modelFit, newdata, submodels = NULL) {
+  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  if (length(modelFit$obsLevels) == 2) {
+    out <- cbind(out, 1-out)
+    colnames(out) <- c("Y","N")
+  }
+  out
+}
+
+ms_forest$levels = function(x) {c("N","Y")}
+
+ms_forest$sort = function(x) {
+  x[order(x$numTrees, x$splitFraction), ]
+}
+
+
+
+
+
+#######################################################################################################################-
 # My Functions ----
 #######################################################################################################################-
 
@@ -78,14 +249,16 @@ grid.draw.arrangelist <- function(x, ...) {
   }
 }
 
-# Summary function for classification performance
-my_twoClassSummary = function (data, lev = NULL, model = NULL) 
+# Custom summary function for classification performance (use by caret)
+mysummary_class = function (data, lev = NULL, model = NULL) 
 {
+  #browser()
+  
   # Get y and yhat
   y = data$obs
   yhat = data[[levels(y)[[2]]]]
   
-  conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
+  conf_obj = caret::confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
   accuracy = as.numeric(conf_obj$overall["Accuracy"])
   missclassification = 1 - accuracy
   
@@ -93,6 +266,43 @@ my_twoClassSummary = function (data, lev = NULL, model = NULL)
   auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
   
   out = c("auc" = auc, "accuracy" = accuracy, "missclassification" = missclassification)
+  out
+}
+
+
+# Custom summary function for regression performance (use by caret)
+mysummary_regr = function(data, lev = NULL, model = NULL)
+{
+  #browser()
+  concord = function(obs, pred, n=100000) {
+    i.samp1 = sample(1:length(obs), n, replace = TRUE)
+    i.samp2 = sample(1:length(obs), n, replace = TRUE)
+    obs1 = obs[i.samp1]
+    obs2 = obs[i.samp2]
+    pred1 = pred[i.samp1]
+    pred2 = pred[i.samp2]
+    sum((obs1 > obs2) * (pred1 > pred2) + (obs1 < obs2) * (pred1 < pred2) + 0.5*(obs1 == obs2)) / sum(obs1 != obs2)
+  }
+  if (is.character(data$obs)) 
+    data$obs = factor(data$obs, levels = lev)
+  
+  isNA = is.na(data[, "pred"])
+  
+  pred = data[, "pred"][!isNA]
+  obs = data[, "obs"][!isNA]
+  
+  spear = cor(pred, obs, method = "spearman")
+  pear = cor(pred, obs, method = "pearson")
+  AUC = concord(pred, obs)
+  MAE = mean(abs(pred-obs))
+  MdAE = median(abs(pred-obs))
+  sMAPE = mean(2 * abs(pred-obs)/(abs(pred)+abs(obs)))
+  sMdAPE = median(2 * abs(pred-obs)/(abs(pred)+abs(obs)))
+  MRAE = mean(abs(pred-obs)/abs(obs-mean(obs)))
+  MdRAE = median(abs(pred-obs)/abs(obs-mean(obs)))
+  
+  out = c(spear, pear, AUC, MAE, MdAE, sMAPE, sMdAPE, MRAE, MdRAE)
+  names(out) = c("spearman","pearson","AUC","MAE", "MdAE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
   out
 }
 
@@ -363,8 +573,8 @@ get_plot_corr <- function(outpdf, df.plot = df, input_type = "metr" , vars = met
 }
 
 
-# Get plot list  for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-get_plot_performance = function(yhat, y, reduce = NULL, color = "blue", colors = twocol) {
+# Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
+get_plot_performance_class = function(yhat, y, reduce_factor = NULL, color = "blue", colors = twocol) {
   
   ## Prepare "direct" information (confusion, distribution, calibration)
   conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
@@ -386,9 +596,9 @@ get_plot_performance = function(yhat, y, reduce = NULL, color = "blue", colors =
     mutate(lift = gain / x)
   
   # Thin out reducable objects (for big test data as this reduces plot size)
-  if (!is.null(reduce)) {
+  if (!is.null(reduce_factor)) {
     set.seed(123)
-    i.reduce = sample(1:length(yhat), floor(reduce * length(yhat)))
+    i.reduce = sample(1:length(yhat), floor(reduce_factor * length(yhat)))
     i.reduce = i.reduce[order(i.reduce)]
     for (type in c("x.values","y.values","alpha.values")) {
       slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
@@ -501,28 +711,191 @@ get_plot_performance = function(yhat, y, reduce = NULL, color = "blue", colors =
 }
 
 
+# Get plot list for Observed vs. Fitted, Residuals, Calibration, Distribution
+get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2), 
+                                     colors = twocol, gradcol = hexcol, ylim = NULL) {
+  
+  ## Prepare
+  pred_obj = mysummary_regr(data.frame(obs = y, pred = yhat))
+  spearman = round(pred_obj["spearman"], 2)
+  df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, 
+                       midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
+  df.distr = data.frame(type = c(rep("y", length(y)), rep("yhat", length(y))),
+                        value = c(y, yhat))
+  df.calib = df.perf %>% group_by(midpoint) %>% summarise(y = mean(y), yhat = mean(yhat))
+  
+  ## Performance plot
+  p_perf = ggplot(data = df.perf, aes_string("yhat", "y")) +
+    geom_hex() + 
+    scale_fill_gradientn(colors = gradcol, name = "count") +
+    geom_smooth(color = "black", level = 0.95, size = 0.5) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    labs(title = bquote(paste("Observed vs. Fitted (", rho[spearman], " = ", .(spearman), ")", sep = "")),
+         x = expression(hat(y))) +
+    theme(plot.title = element_text(hjust = 0.5))
+  if (length(ylim)) p_perf = p_perf + xlim(ylim) + ylim(ylim)
+  
+  
+  ## Residual plot
+  p_res = ggplot(data = df.perf, aes_string("yhat", "res")) +
+    geom_hex() + 
+    scale_fill_gradientn(colors = gradcol, name = "count") +
+    geom_smooth(color = "black", level = 0.95, size = 0.5) +
+    labs(title = "Residuals vs. Fitted", x = expression(hat(y)), y = expression(paste(hat(y) - y))) +
+    theme(plot.title = element_text(hjust = 0.5))
+  if (length(ylim)) p_res = p_res + xlim(ylim)
+  tmp = ggplot_build(p_res)
+  xrange = tmp$layout$panel_ranges[[1]]$x.range
+  yrange = tmp$layout$panel_ranges[[1]]$y.range
+  p.inner_x = ggplot(data = df.perf, aes_string(x = "yhat")) +
+    geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+    scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+    geom_density(color = "black") +
+    theme_void()
+  tmp = ggplot_build(p.inner_x)
+  p.inner_x_inner = ggplot(data = df.perf, aes_string(x = 1, y = "yhat")) +
+    geom_boxplot(color = "black") +
+    coord_flip() +
+    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+    theme_void()
+  p.inner_x = p.inner_x + 
+    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
+    theme_void() +
+    annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                      ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
+  
+  p.inner_y = ggplot(data = df.perf, aes_string(x = "res")) +
+    geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+    scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+    geom_density(color = "black") +
+    coord_flip() +
+    theme_void()
+  tmp = ggplot_build(p.inner_y)
+  p.inner_y_inner = ggplot(data = df.perf, aes_string(x = 1, y = "res")) +
+    geom_boxplot(color = "black") +
+    #coord_flip() +
+    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+    theme_void()
+  p.inner_y = p.inner_y + 
+    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
+    theme_void() +
+    annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                      ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
+  
+  p_res = p_res + 
+    scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+    scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
+    annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
+  
+  
+  # Distribution of predictions and target (plot similar to plot_distr_metr)
+  p_distr = ggplot(data = df.distr, aes_string("value")) +
+    geom_histogram(aes(y = ..density.., fill = type), bins = 40, position = "identity") +
+    geom_density(aes(color = type)) +
+    scale_fill_manual(values = alpha(colors, .2), labels = c("y", expression(paste(hat(y)))), name = " ") + 
+    scale_color_manual(values = colors, labels = c("y", expression(paste(hat(y)))), name = " ") +
+    labs(title = "Distribution", x = " ") +
+    guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+  tmp = ggplot_build(p_distr)
+  p.inner = ggplot(data = df.distr, aes_string("type", "value")) +
+    geom_boxplot(aes_string(color = "type")) +
+    coord_flip() +
+    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
+    scale_color_manual(values = colors, name = " ") +
+    theme_void() +
+    theme(legend.position = "none")
+  p_distr = p_distr + 
+    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
+    theme_my +
+    annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+  
+  # Calibration
+  p_calib = ggplot(df.calib, aes(yhat, y)) +
+    geom_line(color = "black") +
+    geom_point(color = "black") +  
+    xlim(range(c(df.calib$y,df.calib$yhat))) +
+    ylim(range(c(df.calib$y,df.calib$yhat))) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    labs(title = "Calibration", x = "Prediction Average (in quantile bin)", y = "Observation Average") +
+    theme_my 
+  
+  # Plot
+  plots = list(p_perf, p_res, p_calib, p_distr)
+  plots
+}
+
 
 # Variable importance by permutation argument 
-get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, predictors = predictors,
-                                     vars = predictors) {
-  
+get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit,
+                                     predictor_names = predictors, target_name = "target",
+                                     vars = predictors,  metric = "auc") {
   #browser()
   # Original performance
-  perf_orig = my_twoClassSummary(data.frame(
-    obs = df.for_varimp$target, 
-    predict(fit.for_varimp, df.for_varimp[predictors], type = "prob")[2]))["auc"]
+  if (is.factor(df.for_varimp[[target_name]])) {
+    perf_orig = mysummary_class(data.frame(
+      obs = df.for_varimp[[target_name]], 
+      pred = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[2]))[metric]
+  } else {
+    perf_orig = mysummary_regr(data.frame(
+      obs = df.for_varimp[[target_name]], 
+      pred = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
+  }
 
   # Permute
   set.seed(999)
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
   df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
-                      .export = "my_twoClassSummary") %dopar% {
+                      .export = c("mysummary_class","mysummary_regr")) %dopar% 
+  {
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictors], type="prob")[2]  #predict
-    perf = my_twoClassSummary(cbind(obs = df.for_varimp$target, yhat))["auc"]  #performance
+    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
+    if(is.factor(df.for_varimp[[target_name]])) {
+      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
+      perf = mysummary_class(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+    } else {
+      yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
+      perf = mysummary_regr(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+    }
+    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+  }
+  print(Sys.time() - start)
+  
+  # Calculate importance as scaled performance difference
+  df.varimp = df.varimp %>%
+    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
+    arrange(desc(importance))
+  df.varimp 
+}
+
+
+# Variable importance by permutation argument for classification
+get_varimp_by_permutation_class = function(df.for_varimp = df.test, fit.for_varimp = fit,
+                                           predictor_names = predictors, target_name = "target",
+                                           vars = predictors,  metric = "auc") {
+  
+  #browser()
+  # Original performance
+  perf_orig = mysummary_class(data.frame(
+    obs = df.for_varimp[[target_name]], 
+    pred = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[2]))[metric]
+
+  # Permute
+  set.seed(999)
+  i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
+  start = Sys.time()
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
+                      .export = "mysummary_class") %dopar% 
+  {
+    #i=1
+    df.tmp = df.for_varimp
+    df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
+    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
+    perf = mysummary_class(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
   }
   print(Sys.time() - start)
@@ -534,6 +907,39 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
 }
 
 
+# Variable importance by permutation argument for regression
+get_varimp_by_permutation_regr = function(df.for_varimp = df.test, fit.for_varimp = fit,
+                                          predictor_names = predictors, target_name = "target",
+                                          vars = predictors, metric = "spearman") {
+  
+  #browser()
+  # Original performance
+  perf_orig = mysummary_regr(data.frame(
+    obs = df.for_varimp[[target_name]], 
+    pred = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
+  
+  # Permute
+  set.seed(999)
+  i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
+  start = Sys.time()
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
+                      .export = "mysummary_regr") %dopar% 
+  {
+    #i=1
+    df.tmp = df.for_varimp
+    df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
+    yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
+    perf = mysummary_regr(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+  }
+  print(Sys.time() - start)
+  # Calculate importance as scaled performance difference
+  df.varimp = df.varimp %>%
+    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
+    arrange(desc(importance))
+  df.varimp 
+}
+
 
 # Get plot list for variable importance
 get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue","orange","red"), 
@@ -541,6 +947,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
                            df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Subset
   df.ggplot = df.plot %>% filter(variable %in% vars)
+  if (!is.null(df.plot_boot)) df.ggplot_boot = df.plot_boot %>% filter(variable %in% vars)
   
   # Plot
   plot = ggplot(df.ggplot) +
@@ -558,16 +965,16 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
     # Add bootstrap lines
     if (bootstrap_lines == TRUE) {
       plot = plot +
-        geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.plot_boot, 
+        geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
                   color = "grey", size = 0.1) +
-        geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.plot_boot, 
+        geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
                    color = "black", size = 0.3) 
     }
     
     # Add bootstrap Confidence Intervals
     if (bootstrap_CI == TRUE) {
       # Calculate confidence intervals
-      df.help = df.plot_boot %>% 
+      df.help = df.ggplot_boot %>% 
         group_by(variable) %>% 
         summarise(sd = sd(importance)) %>% 
         left_join(select(df.ggplot, variable, importance)) %>% 
@@ -580,15 +987,13 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 }
 
 
-
-
-
 # Partial dependance on green field
-get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, predictors = predictors,
+get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, 
+                          predictor_names = predictors, target_name = "target",
                           vars = topn_vars, levs, quantiles) {
   
-  df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
-                          .export = c("prob_samp2full", "b_sample", "b_all")) %dopar% {
+  df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret") %dopar% 
+  {
     #i=2
     print(vars[i])
     
@@ -605,7 +1010,11 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
       #value = values[1]
       print(value)
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
-      yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictors], type="prob")[[2]], b_sample, b_all) 
+      if (is.factor(df.for_partialdep[[target_name]])) {
+        yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type="prob")[[2]] 
+      } else {
+        yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+      }
       df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), yhat = mean(yhat), 
                                         stringsAsFactors = FALSE))
     }
@@ -626,7 +1035,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                ylim = c(0,1),
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Reference line
-  ref = mean(ifelse(df.for_partialdep$target == levels(df.for_partialdep$target)[2], 1, 0))
+  ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[2], 1, 0))
   # Plot
   plots = map(vars, ~ {
     #.x = vars[2]
@@ -641,7 +1050,8 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
     if (is.factor(df.for_partialdep[[.x]])) {
       # Adapt .x
       df.ggplot[.x] = factor(df.ggplot$value, levels = levels(df.for_partialdep[[.x]])) 
-      df.ggplot_boot[.x] = factor(df.ggplot_boot$value, levels = levels(df.for_partialdep[[.x]])) 
+      if (!is.null(df.plot_boot)) df.ggplot_boot[.x] = factor(df.ggplot_boot$value, 
+                                                              levels = levels(df.for_partialdep[[.x]])) 
       df.ggplot = df.ggplot %>% 
         left_join(df.for_partialdep %>% group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% 
                     mutate(prop = n/sum(n), width = n/max(n))) 
@@ -656,6 +1066,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         #scale_y_continuous(limits = ylim) +
         coord_flip(ylim = ylim) +
         theme_my  
+
     } else {
       # Adapt x
       df.ggplot[[.x]] = as.numeric(df.ggplot$value)
@@ -667,14 +1078,16 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       
       # Plot for a metric variable
       plot = ggplot(df.ggplot, aes_string(x = .x)) +
-        geom_density(aes_string(y = paste0("..density.. * ", ylim[2] / tmp$layout$panel_ranges[[1]]$y.range[2])), 
+        geom_density(aes_string(y = paste0(ylim[1]," + ","..density.. * ", 
+                                           (ylim[2] - ylim[1]) / tmp$layout$panel_ranges[[1]]$y.range[2])), 
                      data = df.for_partialdep, fill = alpha("red", 0.2), color = alpha("red", 0.2)) +
         geom_line(aes_string(y = "yhat"), color = "red") +
         geom_point(aes_string(y = "yhat"), color = "red") +
         geom_rug(aes_string(.x), df.ggplot, sides = "b", col = "red") +
         geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
         labs(title = .x, x = "", y = expression(paste("P(", hat(y), "=1)"))) +
-        scale_y_continuous(limits = ylim) +
+        #scale_y_continuous(limits = ylim) +
+        coord_cartesian(ylim = ylim, expand = FALSE) +
         theme_my 
     }
     

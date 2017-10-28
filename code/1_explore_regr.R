@@ -23,8 +23,7 @@ skip = function() {
 }
 
 # "Save" orignial data
-df = df.orig
-#df = df.orig %>% filter(!is.na(T3)) #for regression
+df = df.orig %>% filter(!is.na(T3)) 
 
 
 
@@ -32,10 +31,9 @@ df = df.orig
 # Define target and train/test-fold ----------------------------------------------------------------------------------
 
 # Target
-df = mutate(df, target = factor(ifelse(Class == "negative", "N", "Y"), levels = c("N","Y")),
-                target_num = ifelse(target == "N", 0 ,1))
-summary(df[c("target","target_num")])
-#df$target = df$T3 #for regression
+df$target = df$T3 #for regression
+summary(df$target)
+hist(df$target, breaks = 20)
 
 # Train/Test fold: usually split by time
 df$fold = factor("train", levels = c("train", "test"))
@@ -52,14 +50,13 @@ summary(df$fold)
 
 # Define metric covariates -------------------------------------------------------------------------------------
 
-metr = c("age","TSH","T3","TT4","T4U","FTI") # NOT USED: "TBG" -> only missings
-#metr = c("age","TSH","TT4","T4U","FTI") #for regression
+metr = c("age","TSH","TT4","T4U","FTI") #for regression
 summary(df[metr]) 
 
 
 
 
-# Create nominal variables for all metric variables (for linear models) before imputing -------------------------------
+# Create nominal variables for all metric variables (for glmnet) before imputing -------------------------------
 
 metr_binned = paste0(metr,"_BINNED_")
 df[metr_binned] = map(df[metr], ~ {
@@ -102,9 +99,8 @@ summary(df[metr])
 # Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
-plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
-#plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,8))) #for regression
-ggsave(paste0(plotloc, "distr_metr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
+plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,6))) 
+ggsave(paste0(plotloc, "distr_metr_regr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
        width = 18, height = 12)
 
 # Winsorize
@@ -127,21 +123,22 @@ metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr a
 names(misspct) = metr #adapt misspct names
 
 # Plot again
-plots = get_plot_distr_metr_class(df, metr, missinfo = misspct)
-ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), width = 18, height = 12)
-
+plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,6))) 
+ggsave(paste0(plotloc, "distr_metr_regr_final.pdf"), 
+       suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
+       width = 18, height = 12)
 
 
 
 # Removing variables -------------------------------------------------------------------------------------------
 
 # Remove Self predictors
-metr = setdiff(metr, "T3")
+metr = setdiff(metr, "xxx")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
 plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0.2)
-ggsave(paste0(plotloc, "corr_metr.pdf"), plot, width = 12, height = 12)
+ggsave(paste0(plotloc, "corr_metr_regr.pdf"), plot, width = 12, height = 12)
 metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
 metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables to remove
 
@@ -156,8 +153,7 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 
 nomi = c("sex","on_thyroxine","query_on_thyroxine","on_antithyroid_medication","sick","pregnant","thyroid_surgery",
          "I131_treatment","query_hypothyroid","query_hyperthyroid","lithium","goitre","tumor","hypopituitary",
-         "psych","referral_source")  # NOT USED: "Class" -> its the target
-#nomi = c(nomi, "Class") #for regression
+         "psych","referral_source", "Class") 
 nomi = union(nomi, paste0("MISS_",miss)) #Add missing indicators
 df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
 summary(df[nomi])
@@ -182,9 +178,10 @@ nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange
 summary(df[nomi], topn_toomany + 2)
 
 # Check
-plots = get_plot_distr_nomi_class(df, nomi)
+plots = get_plot_distr_nomi_regr(df, nomi)
 #plots = get_plot_distr_nomi_regr(df, nomi) #for regression
-ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3, top = NULL), width = 18, height = 12)
+ggsave(paste0(plotloc, "distr_nomi_regr.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3, top = NULL), 
+       width = 18, height = 12)
 
 
 
@@ -196,7 +193,7 @@ nomi = setdiff(nomi, "xxx")
 
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = 0)
-ggsave(paste0(plotloc, "corr_nomi.pdf"), plot, width = 12, height = 12)
+ggsave(paste0(plotloc, "corr_nomi_regr.pdf"), plot, width = 12, height = 12)
 nomi = setdiff(nomi, "MISS_FTI")
 
 
@@ -210,21 +207,21 @@ nomi = setdiff(nomi, "MISS_FTI")
 
 predictors = c(metr, nomi)
 formula = as.formula(paste("target", "~", paste(predictors, collapse = " + ")))
-predictors_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
-formula_binned = as.formula(paste("target", "~", paste(predictors_binned, collapse = " + ")))
+predictors_glmnet = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
+formula_glmnet = as.formula(paste("target", "~", paste(predictors_glmnet, collapse = " + ")))
 
 # Check
 summary(df[predictors])
 setdiff(predictors, colnames(df))
-summary(df[predictors_binned])
-setdiff(predictors_binned, colnames(df))
+summary(df[predictors_glmnet])
+setdiff(predictors_glmnet, colnames(df))
 
 
 
 
 # Save image ----------------------------------------------------------------------------------------------------------
 
-save.image("1_explore.rdata")
+save.image("1_explore_regr.rdata")
 
 
 
