@@ -38,6 +38,7 @@ library(ROCR)
 #library(devtools); install_github("AppliedDataSciencePartners/xgboostExplainer")
 library(xgboostExplainer)
 
+#library(devtools); options(devtools.install.args = "--no-multiarch"); install_github("Microsoft/LightGBM", subdir = "R-package")
 library(lightgbm)
 
 
@@ -130,9 +131,9 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
   if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data$pred
   
   # Remove NA in target
-  i.NA = is.na(yhat)
-  yhat = yhat[-i.NA]
-  y = y[-i.NA]
+  i.notna = which(!is.na(yhat))
+  yhat = yhat[i.notna]
+  y = y[i.notna]
   
   spear = cor(yhat, y, method = "spearman")
   pear = cor(yhat, y, method = "pearson")

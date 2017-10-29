@@ -10,6 +10,7 @@ source("./code/0_init.R")
 
 
 #### Initialize parallel processing ####
+closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
 cl = makeCluster(4)
 registerDoParallel(cl) 

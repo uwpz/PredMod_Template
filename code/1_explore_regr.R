@@ -207,14 +207,14 @@ nomi = setdiff(nomi, "MISS_FTI")
 
 predictors = c(metr, nomi)
 formula = as.formula(paste("target", "~", paste(predictors, collapse = " + ")))
-predictors_glmnet = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
-formula_glmnet = as.formula(paste("target", "~", paste(predictors_glmnet, collapse = " + ")))
+predictors_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
+formula_binned = as.formula(paste("target", "~", paste(predictors_binned, collapse = " + ")))
 
 # Check
 summary(df[predictors])
 setdiff(predictors, colnames(df))
-summary(df[predictors_glmnet])
-setdiff(predictors_glmnet, colnames(df))
+summary(df[predictors_binned])
+setdiff(predictors_binned, colnames(df))
 
 
 

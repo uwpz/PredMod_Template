@@ -7,7 +7,9 @@ load("1_explore.rdata")
 source("./code/0_init.R")
 
 
+
 ## Initialize parallel processing
+closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
 cl = makeCluster(4)
 registerDoParallel(cl) 
@@ -125,7 +127,7 @@ fit = train(df.train[,predictors], df.train$target,
             trControl = ctrl_index_fff, metric = metric, 
             method = ms_forest, 
             tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
-            verbose = 0) 
+            verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
 plot(fit)
 # -> splitFraction = 0.3
 
@@ -140,11 +142,11 @@ varImp(fit)
 skip = function() {
   
   y = "auc"
-  x = "nrounds"
-  color = "as.factor(max_depth)"
-  linetype =  "as.factor(eta)"
-  shape = "as.factor(min_child_weight)"
-  facet = "min_child_weight ~ subsample + colsample_bytree"
+  x = "nrounds"; #x = "numTrees"
+  color = "as.factor(max_depth)" ; #color = "as.factor(numLeaves)"
+  linetype =  "as.factor(eta)"; #linetype =  "as.factor(learningRate)"
+  shape = "as.factor(min_child_weight)"; #shape = "as.factor(minSplit)"
+  facet = "min_child_weight ~ subsample + colsample_bytree";  #facet = "minSplit ~ exampleFraction + featureFraction"
   
   # Plot tuning result with ggplot
   fit$results %>% 
@@ -249,16 +251,16 @@ perfcomp = function(method, nsim = 5) {
       fit = train(df.train[,predictors], df.train$target, 
                   trControl = ctrl_index, metric = metric, 
                   method = ms_boosttree, 
-                  tuneGrid = expand.grid(numTrees = seq(100,1100,500), numLeaves = c(10,20),  
-                                         learningRate = c(0.1,0.01), featureFraction = c(0.5,0.7),  
-                                         minSplit = c(5,10), exampleFraction = c(0.5,0.7)),
-                  verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+                  tuneGrid = expand.grid(numTrees = seq(400,1000,200), numLeaves = 10,  
+                                         learningRate = 0.01, featureFraction = 0.7,  
+                                         minSplit = 10, exampleFraction = 0.7),
+                  verbose = 0) 
     }
     if (method == "ms_forest") { 
       fit = train(df.train[,predictors], df.train$target, 
                   trControl = ctrl_index, metric = metric, 
                   method = ms_forest, 
-                  tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
+                  tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = 0.3),
                   verbose = 0) 
       plot(fit)
     }
