@@ -35,9 +35,11 @@ library(xgboost)
 # library(glmnet)
 library(ROCR)
 
-#library(devtools) 
-#install_github("AppliedDataSciencePartners/xgboostExplainer")
+#library(devtools); install_github("AppliedDataSciencePartners/xgboostExplainer")
 library(xgboostExplainer)
+
+library(lightgbm)
+
 
 
 #######################################################################################################################-
@@ -66,167 +68,6 @@ theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
 
 
 
-#######################################################################################################################-
-# Caret definition of MicrosofMl algorithms ----
-#######################################################################################################################-
-
-## rxFastTrees (boosted trees)
-ms_boosttree = list()
-ms_boosttree$label = "MicrosoftML rxFastTrees"
-ms_boosttree$library = "MicrosoftML"
-ms_boosttree$type = c("Regression","Classification")
-ms_boosttree$parameters = 
-  read.table(header = TRUE, sep = ",", strip.white = TRUE, 
-             text = "parameter,class,label
-             numTrees,numeric,Boosting Interations
-             numLeaves,numeric,Number of Leaves
-             minSplit,numeric,Min Number for a leaf
-             learningRate,numeric,Shrinkage
-             featureFraction,numeric,features per tree
-             exampleFraction,numeric,rows per tree"                             
-  )
-
-ms_boosttree$grid = function(x, y, len = NULL, search = "grid") {
-  if (search == "grid") {
-    out <- expand.grid(numTrees = floor((1:len) * 50),
-                       numLeaves = 2^seq(1, len),
-                       minSplit = 10,
-                       learningRate = .1,
-                       featureFraction = 0.7,
-                       exampleFraction = 0.7)
-  } else {
-    out <- data.frame(numTrees = floor(runif(len, min = 10, max = 5000)),
-                      numLeaves = 2 ^ sample(1:6, replace = TRUE, size = len), 
-                      minSplit = 2 ^ sample(0:6, replace = TRUE, size = len),
-                      learningRate = runif(len, min = .001, max = .6),
-                      featureFraction = runif(len, min = .1, max = 1),
-                      exampleFraction = runif(len, min = .1, max = 1)) 
-    out <- out[!duplicated(out),]
-  }
-  out
-}
-
-ms_boosttree$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
-  #browser()
-  theDots = list(...)
-  #if (is.factor(y) && length(lev) == 2) {y = ifelse(y == lev[1], 1, 0)}
-  #y = factor(y, levels = c(1,0))
-  #x = as.matrix(x)
-  if (is.factor(y)) type = "binary" else type = "regression"
-  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
-                  data = cbind(x, y),
-                  numTrees = param$numTrees,
-                  numLeaves = param$numLeaves,
-                  minSplit = param$minSplit,
-                  learningRate = param$learningRate,
-                  featureFraction = param$featureFraction,
-                  exampleFraction = param$exampleFraction,
-                  type = type)
-  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
-  do.call("rxFastTrees", modArgs)
-}
-
-ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
-  #browser()
-  if(modelFit$problemType == "Classification") {
-    out = rxPredict(modelFit, newdata)$Probability.Y
-  } else {
-    newdata$y = NA
-    out = rxPredict(modelFit, newdata)$Score
-  }
-  if (length(modelFit$obsLevels) == 2) {
-    out <- ifelse(out >= 0.5, "Y", "N")
-  }
-  out
-}
-
-ms_boosttree$prob = function(modelFit, newdata, submodels = NULL) {
-  #browser()
-  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
-  if (length(modelFit$obsLevels) == 2) {
-    out <- cbind(out, 1-out)
-    colnames(out) <- c("Y","N")
-  }
-  out
-}
-
-ms_boosttree$levels = function(x) {c("N","Y")}
-
-ms_boosttree$sort = function(x) {
-  x[order(x$numTrees, x$numLeaves, x$learningRate), ]
-}
-
-
-
-
-## rxForest (random Forest)
-ms_forest = list()
-ms_forest$label = "MicrosoftML rxFastForest"
-ms_forest$library = "MicrosoftML"
-ms_forest$type = c("Regression","Classification")
-ms_forest$parameters = 
-  read.table(header = TRUE, sep = ",", strip.white = TRUE,
-             text = "parameter,class,label
-             numTrees,numeric,Number of Trees
-             splitFraction,numeric,Fraction of features in split"
-  )
-
-ms_forest$grid = function(x, y, len = NULL, search = "grid") {
-  if (search == "grid") {
-    out <- expand.grid(numTrees = floor((1:len) * 50),
-                       splitFraction = seq(0.01, 1, length.out = len))
-  } else {
-    out <- data.frame(numTrees = floor(runif(len, min = 1, max = 5000)),
-                      splitFraction = runif(len, min = 0.01, max = 1))
-    out <- out[!duplicated(out),]
-  }
-  out
-}
-
-ms_forest$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
-  theDots = list(...)
-  if (is.factor(y)) type = "binary" else type = "regression"
-  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
-                  data = cbind(x, y),
-                  numTrees = param$numTrees,
-                  splitFraction = param$splitFraction,
-                  type = type)
-  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
-  do.call("rxFastForest", modArgs)
-}
-
-ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
-  #browser()
-  if(modelFit$problemType == "Classification") {
-    out = rxPredict(modelFit, newdata)$Probability.Y
-  } else {
-    newdata$y = NA
-    out = rxPredict(modelFit, newdata)$Score
-  }
-  if (length(modelFit$obsLevels) == 2) {
-    out <- ifelse(out >= 0.5, "Y", "N")
-  }
-  out
-}
-
-ms_forest$prob = function(modelFit, newdata, submodels = NULL) {
-  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
-  if (length(modelFit$obsLevels) == 2) {
-    out <- cbind(out, 1-out)
-    colnames(out) <- c("Y","N")
-  }
-  out
-}
-
-ms_forest$levels = function(x) {c("N","Y")}
-
-ms_forest$sort = function(x) {
-  x[order(x$numTrees, x$splitFraction), ]
-}
-
-
-
-
 
 #######################################################################################################################-
 # My Functions ----
@@ -250,15 +91,15 @@ grid.draw.arrangelist <- function(x, ...) {
 }
 
 # Custom summary function for classification performance (use by caret)
-mysummary_class = function (data, lev = NULL, model = NULL) 
+mysummary_class = function(data, lev = NULL, model = NULL) 
 {
   #browser()
   
-  # Get y and yhat
-  y = data$obs
-  yhat = data[[levels(y)[[2]]]]
-  
-  conf_obj = caret::confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
+  # Get y and yhat ("else" is default caret behavior)
+  if ("y" %in% colnames(data)) y = data$y else y = data$obs 
+  if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data[[levels(y)[[2]]]]
+
+  conf_obj = caret::confusionMatrix(factor(ifelse(yhat > 0.5,"Y","N"), levels = levels(y)), y)
   accuracy = as.numeric(conf_obj$overall["Accuracy"])
   missclassification = 1 - accuracy
   
@@ -283,28 +124,31 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
     pred2 = pred[i.samp2]
     sum((obs1 > obs2) * (pred1 > pred2) + (obs1 < obs2) * (pred1 < pred2) + 0.5*(obs1 == obs2)) / sum(obs1 != obs2)
   }
-  if (is.character(data$obs)) 
-    data$obs = factor(data$obs, levels = lev)
+ 
+  # Get y and yhat ("else" is default caret behavior)
+  if ("y" %in% colnames(data)) y = data$y else y = data$obs 
+  if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data$pred
   
-  isNA = is.na(data[, "pred"])
+  # Remove NA in target
+  i.NA = is.na(yhat)
+  yhat = yhat[-i.NA]
+  y = y[-i.NA]
   
-  pred = data[, "pred"][!isNA]
-  obs = data[, "obs"][!isNA]
-  
-  spear = cor(pred, obs, method = "spearman")
-  pear = cor(pred, obs, method = "pearson")
-  AUC = concord(pred, obs)
-  MAE = mean(abs(pred-obs))
-  MdAE = median(abs(pred-obs))
-  sMAPE = mean(2 * abs(pred-obs)/(abs(pred)+abs(obs)))
-  sMdAPE = median(2 * abs(pred-obs)/(abs(pred)+abs(obs)))
-  MRAE = mean(abs(pred-obs)/abs(obs-mean(obs)))
-  MdRAE = median(abs(pred-obs)/abs(obs-mean(obs)))
+  spear = cor(yhat, y, method = "spearman")
+  pear = cor(yhat, y, method = "pearson")
+  AUC = concord(yhat, y)
+  MAE = mean(abs(yhat - y))
+  MdAE = median(abs(yhat - y))
+  sMAPE = mean(2 * abs(yhat - y)/(abs(yhat) + abs(y)))
+  sMdAPE = median(2 * abs(yhat - y)/(abs(yhat) + abs(y)))
+  MRAE = mean(abs(yhat - y)/abs(y - mean(y)))
+  MdRAE = median(abs(yhat - y)/abs(y - mean(y)))
   
   out = c(spear, pear, AUC, MAE, MdAE, sMAPE, sMdAPE, MRAE, MdRAE)
   names(out) = c("spearman","pearson","AUC","MAE", "MdAE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
   out
 }
+
 
 # Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
@@ -716,7 +560,7 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
                                      colors = twocol, gradcol = hexcol, ylim = NULL) {
   
   ## Prepare
-  pred_obj = mysummary_regr(data.frame(obs = y, pred = yhat))
+  pred_obj = mysummary_regr(data.frame(y = y, yhat = yhat))
   spearman = round(pred_obj["spearman"], 2)
   df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, 
                        midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
@@ -835,12 +679,12 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   # Original performance
   if (is.factor(df.for_varimp[[target_name]])) {
     perf_orig = mysummary_class(data.frame(
-      obs = df.for_varimp[[target_name]], 
-      pred = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[2]))[metric]
+      y = df.for_varimp[[target_name]], 
+      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[[2]]))[metric]
   } else {
     perf_orig = mysummary_regr(data.frame(
-      obs = df.for_varimp[[target_name]], 
-      pred = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
+      y = df.for_varimp[[target_name]], 
+      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
   }
 
   # Permute
@@ -853,13 +697,13 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
+    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
     if(is.factor(df.for_varimp[[target_name]])) {
-      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
-      perf = mysummary_class(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
+      perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     } else {
       yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
-      perf = mysummary_regr(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+      perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     }
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
   }
@@ -881,8 +725,8 @@ get_varimp_by_permutation_class = function(df.for_varimp = df.test, fit.for_vari
   #browser()
   # Original performance
   perf_orig = mysummary_class(data.frame(
-    obs = df.for_varimp[[target_name]], 
-    pred = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[2]))[metric]
+    y = df.for_varimp[[target_name]], 
+    yhat = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[[2]]))[metric]
 
   # Permute
   set.seed(999)
@@ -894,8 +738,8 @@ get_varimp_by_permutation_class = function(df.for_varimp = df.test, fit.for_vari
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[2]  #predict
-    perf = mysummary_class(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
+    perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
   }
   print(Sys.time() - start)
@@ -915,8 +759,8 @@ get_varimp_by_permutation_regr = function(df.for_varimp = df.test, fit.for_varim
   #browser()
   # Original performance
   perf_orig = mysummary_regr(data.frame(
-    obs = df.for_varimp[[target_name]], 
-    pred = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
+    y = df.for_varimp[[target_name]], 
+    yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
   
   # Permute
   set.seed(999)
@@ -929,7 +773,7 @@ get_varimp_by_permutation_regr = function(df.for_varimp = df.test, fit.for_varim
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
     yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
-    perf = mysummary_regr(data.frame(obs = df.for_varimp[[target_name]], pred = yhat))[metric]  #performance
+    perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
   }
   print(Sys.time() - start)
@@ -1035,7 +879,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                ylim = c(0,1),
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Reference line
-  ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[2], 1, 0))
+  ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[[2]], 1, 0))
   # Plot
   plots = map(vars, ~ {
     #.x = vars[2]
@@ -1344,5 +1188,168 @@ plot_inter_active = function(outfile, vars = inter, df = df.interpret, fit = fit
   rgl.close()
   
 }
+
+
+
+#######################################################################################################################-
+# Caret definition of MicrosofMl algorithms ----
+#######################################################################################################################-
+
+## rxFastTrees (boosted trees)
+ms_boosttree = list()
+ms_boosttree$label = "MicrosoftML rxFastTrees"
+ms_boosttree$library = "MicrosoftML"
+ms_boosttree$type = c("Regression","Classification")
+ms_boosttree$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE, 
+             text = "parameter,class,label
+             numTrees,numeric,Boosting Interations
+             numLeaves,numeric,Number of Leaves
+             minSplit,numeric,Min Number for a leaf
+             learningRate,numeric,Shrinkage
+             featureFraction,numeric,features per tree
+             exampleFraction,numeric,rows per tree"                             
+  )
+
+ms_boosttree$grid = function(x, y, len = NULL, search = "grid") {
+  if (search == "grid") {
+    out <- expand.grid(numTrees = floor((1:len) * 50),
+                       numLeaves = 2^seq(1, len),
+                       minSplit = 10,
+                       learningRate = .1,
+                       featureFraction = 0.7,
+                       exampleFraction = 0.7)
+  } else {
+    out <- data.frame(numTrees = floor(runif(len, min = 10, max = 5000)),
+                      numLeaves = 2 ^ sample(1:6, replace = TRUE, size = len), 
+                      minSplit = 2 ^ sample(0:6, replace = TRUE, size = len),
+                      learningRate = runif(len, min = .001, max = .6),
+                      featureFraction = runif(len, min = .1, max = 1),
+                      exampleFraction = runif(len, min = .1, max = 1)) 
+    out <- out[!duplicated(out),]
+  }
+  out
+}
+
+ms_boosttree$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
+  #browser()
+  theDots = list(...)
+  #if (is.factor(y) && length(lev) == 2) {y = ifelse(y == lev[1], 1, 0)}
+  #y = factor(y, levels = c(1,0))
+  #x = as.matrix(x)
+  if (is.factor(y)) type = "binary" else type = "regression"
+  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
+                  data = cbind(x, y),
+                  numTrees = param$numTrees,
+                  numLeaves = param$numLeaves,
+                  minSplit = param$minSplit,
+                  learningRate = param$learningRate,
+                  featureFraction = param$featureFraction,
+                  exampleFraction = param$exampleFraction,
+                  type = type)
+  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
+  do.call("rxFastTrees", modArgs)
+}
+
+ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if(modelFit$problemType == "Classification") {
+    out = rxPredict(modelFit, newdata)$Probability.Y
+  } else {
+    newdata$y = NA
+    out = rxPredict(modelFit, newdata)$Score
+  }
+  if (length(modelFit$obsLevels) == 2) {
+    out <- ifelse(out >= 0.5, "Y", "N")
+  }
+  out
+}
+
+ms_boosttree$prob = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  if (length(modelFit$obsLevels) == 2) {
+    out <- cbind(out, 1-out)
+    colnames(out) <- c("Y","N")
+  }
+  out
+}
+
+ms_boosttree$levels = function(x) {c("N","Y")}
+
+ms_boosttree$sort = function(x) {
+  x[order(x$numTrees, x$numLeaves, x$learningRate), ]
+}
+
+
+
+
+## rxForest (random Forest)
+ms_forest = list()
+ms_forest$label = "MicrosoftML rxFastForest"
+ms_forest$library = "MicrosoftML"
+ms_forest$type = c("Regression","Classification")
+ms_forest$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE,
+             text = "parameter,class,label
+             numTrees,numeric,Number of Trees
+             splitFraction,numeric,Fraction of features in split"
+  )
+
+ms_forest$grid = function(x, y, len = NULL, search = "grid") {
+  if (search == "grid") {
+    out <- expand.grid(numTrees = floor((1:len) * 50),
+                       splitFraction = seq(0.01, 1, length.out = len))
+  } else {
+    out <- data.frame(numTrees = floor(runif(len, min = 1, max = 5000)),
+                      splitFraction = runif(len, min = 0.01, max = 1))
+    out <- out[!duplicated(out),]
+  }
+  out
+}
+
+ms_forest$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
+  theDots = list(...)
+  if (is.factor(y)) type = "binary" else type = "regression"
+  modArgs <- list(formula = paste("y~", paste0(names(x), collapse = "+")),
+                  data = cbind(x, y),
+                  numTrees = param$numTrees,
+                  splitFraction = param$splitFraction,
+                  type = type)
+  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
+  do.call("rxFastForest", modArgs)
+}
+
+ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if(modelFit$problemType == "Classification") {
+    out = rxPredict(modelFit, newdata)$Probability.Y
+  } else {
+    newdata$y = NA
+    out = rxPredict(modelFit, newdata)$Score
+  }
+  if (length(modelFit$obsLevels) == 2) {
+    out <- ifelse(out >= 0.5, "Y", "N")
+  }
+  out
+}
+
+ms_forest$prob = function(modelFit, newdata, submodels = NULL) {
+  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  if (length(modelFit$obsLevels) == 2) {
+    out <- cbind(out, 1-out)
+    colnames(out) <- c("Y","N")
+  }
+  out
+}
+
+ms_forest$levels = function(x) {c("N","Y")}
+
+ms_forest$sort = function(x) {
+  x[order(x$numTrees, x$splitFraction), ]
+}
+
+
+
 
 
