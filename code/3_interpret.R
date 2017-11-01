@@ -121,15 +121,19 @@ ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 
 #---- Check residuals ----------------------------------------------------------------------------------
 
 # Residuals
-df.test$residual = y_test - yhat_test
+if (type == "class") {
+  df.test$residual = y_test - yhat_test
+  df.test$abs_residual = abs(y_test - yhat_test)
+} else {
+  df.test$residual = as.numeric(y_test)-1 - yhat_test
+  df.test$abs_residual = abs(as.numeric(y_test)-1 - yhat_test)
+}
 summary(df.test$residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-3,3))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = c(-1,1)))
 ggsave(paste0(plotloc, "diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
-
 # Absolute residuals
-df.test$abs_residual = abs(y_test - yhat_test)
 summary(df.test$abs_residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "abs_residual", ylim = c(0,1)))
@@ -301,7 +305,7 @@ if (type == "class") {
 }
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,4))
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,1))
 ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
@@ -328,7 +332,7 @@ if (type == "class") {
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(1,3))
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,1))
 ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
@@ -369,7 +373,6 @@ df.model_test = as.data.frame(m.model_test)
 df.model_test$id = 1:nrow(df.model_test)
 
 ## Plot
-type = "regr"
 if (type == "class") {
   plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
 } else {

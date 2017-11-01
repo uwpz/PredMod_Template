@@ -798,7 +798,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                ylim = c(0,1),
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Reference line
-  if (is.factor(df.for_partialdep[["target_name"]])) {
+  if (is.factor(df.for_partialdep[[target_name]])) {
     ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[[2]], 1, 0))
   } else {
     ref = mean(df.for_partialdep[[target_name]])

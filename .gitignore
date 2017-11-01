@@ -5,3 +5,4 @@
 bigdata/*
 output/*
 *.rdata
+lightgbm.model
