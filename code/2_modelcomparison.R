@@ -1,9 +1,4 @@
-type = "regr"
-if (type == "class") {
-  
-} else {
-  
-}
+
 #######################################################################################################################-
 #|||| Initialize ||||----
 #######################################################################################################################-
@@ -144,24 +139,24 @@ plot(fit)
 # -> max_depth = 3, shrinkage = 0.01, colsample_bytree = subsample = 0.7, n.minobsinnode = 5
 
 
-# fit = train(df.train[,predictors], df.train$target, 
-#             trControl = ctrl_index_fff, metric = metric, 
-#             method = ms_boosttree, 
-#             tuneGrid = expand.grid(numTrees = seq(100,1100,500), numLeaves = c(10,20),  
-#                                    learningRate = c(0.1,0.01), featureFraction = c(0.5,0.7),  
-#                                    minSplit = c(5,10), exampleFraction = c(0.5,0.7)),
-#             verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
-# plot(fit)
-# # -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
-# 
-# 
-# fit = train(df.train[,predictors], df.train$target, 
-#             trControl = ctrl_index_fff, metric = metric, 
-#             method = ms_forest, 
-#             tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
-#             verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
-# plot(fit)
-# # -> splitFraction = 0.3
+fit = train(df.train[,predictors], df.train$target,
+            trControl = ctrl_index_fff, metric = metric,
+            method = ms_boosttree,
+            tuneGrid = expand.grid(numTrees = seq(100,1100,500), numLeaves = c(10,20),
+                                   learningRate = c(0.1,0.01), featureFraction = c(0.5,0.7),
+                                   minSplit = c(5,10), exampleFraction = c(0.5,0.7)),
+            verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+plot(fit)
+# -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
+
+
+fit = train(df.train[,predictors], df.train$target,
+            trControl = ctrl_index_fff, metric = metric,
+            method = ms_forest,
+            tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
+            verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+plot(fit)
+# -> splitFraction = 0.3
 
 
 fit = train(formula, data = as.data.frame(df.train[c("target",predictors)]),
@@ -175,7 +170,6 @@ fit = train(formula, data = as.data.frame(df.train[c("target",predictors)]),
                                    min_data_in_leaf = c(5,10), bagging_fraction = c(0.5,0.7)),
             max_depth = 3,
             verbose = 0) 
-
 plot(fit)
 # -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
 
@@ -193,9 +187,11 @@ skip = function() {
   # xgboost
   x = "nrounds"; color = "as.factor(max_depth)"; linetype = "as.factor(eta)"; 
   shape = "as.factor(min_child_weight)"; facet = "min_child_weight ~ subsample + colsample_bytree"
+  
   # ms_boosttree
   x = "numTrees"; color = "as.factor(numLeaves)"; linetype = "as.factor(learningRate)";
   shape = "as.factor(minSplit)"; facet = "minSplit ~ exampleFraction + featureFraction"
+  
   # lgbm
   x = "num_rounds"; color = "as.factor(num_leaves)"; linetype = "as.factor(learning_rate)";  
   shape = "as.factor(min_data_in_leaf)"; facet = "min_data_in_leaf ~ bagging_fraction + feature_fraction"
@@ -361,6 +357,8 @@ df.result = bind_rows(df.result, perfcomp(method = "rpart", nsim = nsim))
 df.result = bind_rows(df.result, perfcomp(method = "rf", nsim = nsim))        
 df.result = bind_rows(df.result, perfcomp(method = "gbm", nsim = nsim))       
 df.result = bind_rows(df.result, perfcomp(method = "xgbTree", nsim = nsim))       
+df.result = bind_rows(df.result, perfcomp(method = "ms_boosttree", nsim = nsim))       
+df.result = bind_rows(df.result, perfcomp(method = "ms_forest", nsim = nsim))       
 df.result$sim = as.factor(df.result$sim)
 df.result$method = factor(df.result$method, levels = unique(df.result$method))
 
@@ -445,6 +443,12 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
       yhat
     }
     yhat_test = prob_samp2full(yhat_test, b_sample, b_all)
+    
+    # Bind together
+    res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.train)),
+                      t(mysummary_class(data.frame(y = y_train, yhat = yhat_train)))),
+                cbind(data.frame("fold" = "test", "numtrainobs" = length(i.train)),
+                      t(mysummary_class(data.frame(y = y_test, yhat = yhat_test)))))
   } else {
     ## Score 
     # Train data 
@@ -460,17 +464,15 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
       gc()
       yhat
     }
+    
+    # Bind together
+    res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.train)),
+                      t(mysummary_regr(data.frame(y = y_train, yhat = yhat_train)))),
+                cbind(data.frame("fold" = "test", "numtrainobs" = length(i.train)),
+                      t(mysummary_regr(data.frame(y = y_test, yhat = yhat_test)))))
   }
   
 
-  # Bind together
-  res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.train)),
-                   t(mysummary_class(data.frame(y = y_train, yhat = yhat_train)))),
-              cbind(data.frame("fold" = "test", "numtrainobs" = length(i.train)),
-                    t(mysummary_class(data.frame(y = y_test, yhat = yhat_test)))))
-  
-  
-  
   ## Garbage collection and output
   gc()
   res

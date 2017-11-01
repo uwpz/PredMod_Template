@@ -1,4 +1,4 @@
-type = "regr"
+type = "class"
 if (type == "class") {
   
 } else {
