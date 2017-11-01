@@ -1,7 +1,7 @@
 
 #TODO: 
-# residual check
-# 90%train-importance model
+# interactions by glmnet argument
+
 
 #######################################################################################################################-
 # Libraries + Parallel Processing Start ----
@@ -18,6 +18,7 @@ library(stringr)
 library(lubridate)
 library(bindrcpp)
 library(magrittr)
+library(scales)
 
 library(doParallel)
 # 
@@ -25,6 +26,8 @@ library(corrplot)
 library(vcd)
 library(grid)
 library(gridExtra)
+library(waterfalls)
+
 # library(Hmisc)
 # library(d3heatmap)
 # library(htmlwidgets)
@@ -41,6 +44,7 @@ library(xgboostExplainer)
 #library(devtools); options(devtools.install.args = "--no-multiarch"); install_github("Microsoft/LightGBM", subdir = "R-package")
 library(lightgbm)
 
+#library(h2o); h2o.init()
 
 
 #######################################################################################################################-
@@ -153,17 +157,12 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
 
 # Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
-                                     nbins = 20, color = twocol, legend_only_in_1stplot = TRUE) {
+                                     varimpinfo = NULL, nbins = 20, color = twocol, legend_only_in_1stplot = TRUE) {
   # Get levels of target
   levs_target = levels(df.plot[[target_name]])
   
-  # Univariate variable importance
-  varimp = filterVarImp(df.plot[vars], df.plot[[target_name]], nonpara = TRUE)[levs_target[2]] %>% 
-              mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .[[levs_target[2]]]
-  names(varimp) = vars
-  
   # Calculate missinfo
-  if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df)), 3))
+  if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df.plot)), 3))
   
   # Loop over vars
   plots = map(vars, ~ {
@@ -177,7 +176,7 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
       scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
       scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
       #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-      labs(title = paste0(.x," (VI: ", round(varimp[.x],2),")"),
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")),
            x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
     
     # Get underlying data for max of y-value and range of x-value
@@ -209,11 +208,9 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
 
 # Get plot list of metric variables vs regression target 
 get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
-                                    nbins = 50, color = hexcol, ylim = NULL, legend_only_in_1stplot = TRUE) {
-  # Univariate variable importance
-  varimp = sqrt(filterVarImp(df.plot[vars], df.plot[[target_name]], nonpara = TRUE)) %>% .[[1]]
-  names(varimp) = vars
-  
+                                    varimpinfo = NULL, nbins = 50, color = hexcol, ylim = NULL, 
+                                    legend_only_in_1stplot = FALSE) {
+
   df.plot$dummy = "dummy"
   
   # Loop over vars
@@ -226,7 +223,7 @@ get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "ta
       geom_hex() + 
       scale_fill_gradientn(colours = color) +
       geom_smooth(color = "black", level = 0.95, size = 0.5) +
-      labs(title = paste0(.x," (VI: ", round(varimp[.x],2),")"),
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")),
            x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
     if (!is.null(ylim)) p = p + ylim(ylim)
     
@@ -265,15 +262,10 @@ get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "ta
 
 
 # Get plot list of nomial variables vs classification target 
-get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "target",  
+get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL, 
                                      color = twocol) {
   # Get levels of target
   levs_target = levels(df.plot[[target_name]])
-  
-  # Univariate variable importance
-  varimp = filterVarImp(df.plot[vars], df.plot[[target_name]], nonpara = TRUE)[levs_target[2]] %>% 
-    mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .[[levs_target[2]]]
-  names(varimp) = vars
   
   # Loop over vars
   plots = map(vars, ~ {
@@ -292,7 +284,7 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
     p = ggplot(df.ggplot, aes_string(x = .x, y = "prob")) +
       geom_bar(stat = "identity", width = df.ggplot$width, color = twocol[2], fill = alpha(twocol[2], 0.2)) +
       scale_x_discrete(labels = paste0(df.ggplot[[.x]], " (", round(100 * df.ggplot[["perc"]],1), "%)")) + 
-      labs(title = paste0(.x," (VI:", varimp[.x], ")"), 
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", varimp[.x], ")")), 
            x = "", 
            y = paste0("Proportion ",target_name," = ",levs_target[2])) +
       geom_hline(yintercept = sum(df.plot[[target_name]] == levs_target[2]) / nrow(df.plot), 
@@ -306,12 +298,9 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
 
 
 # Get plot list of nomial variables vs regression target 
-get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "target",  
+get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL,  
                                     ylim = NULL) {
-  # Univariate variable importance
-  varimp = sqrt(filterVarImp(df.plot[vars], df.plot[[target_name]], nonpara = TRUE)) %>% .[[1]]
-  names(varimp) = vars
-  
+
   # Loop over vars
   plots = map(vars, ~ {
     #.x = vars[1]
@@ -325,7 +314,7 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
       coord_flip() +
       scale_x_discrete(labels = paste0(levels(df.plot[[.x]]), " (", 
                                        round(100 * table(df.plot[[.x]])/nrow(df.plot), 1), "%)")) +
-      labs(title = paste0(.x," (VI: ", round(varimp[.x],2),")"), x = "") +
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")), x = "") +
       theme_my +
       theme(legend.position = "none") 
     if (!is.null(ylim)) p = p + ylim(ylim)
@@ -357,10 +346,10 @@ get_plot_corr <- function(outpdf, df.plot = df, input_type = "metr" , vars = met
   # Correlation matrix
   if (input_type == "metr") {
     ## For metric variables
-    m.corr = abs(cor(df[vars], method = tolower(method), use = "pairwise.complete.obs"))
+    m.corr = abs(cor(df.plot[vars], method = tolower(method), use = "pairwise.complete.obs"))
     
     # Calculate missinfo
-    if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df)), 3))
+    if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df.plot)), 3))
     
     # Adapt labels
     rownames(m.corr) = colnames(m.corr) = 
@@ -698,9 +687,8 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
-    if(is.factor(df.for_varimp[[target_name]])) {
-      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
+    if (is.factor(df.for_varimp[[target_name]])) {
+      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]  #predict
       perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     } else {
       yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
@@ -710,74 +698,6 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   }
   print(Sys.time() - start)
   
-  # Calculate importance as scaled performance difference
-  df.varimp = df.varimp %>%
-    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
-    arrange(desc(importance))
-  df.varimp 
-}
-
-
-# Variable importance by permutation argument for classification
-get_varimp_by_permutation_class = function(df.for_varimp = df.test, fit.for_varimp = fit,
-                                           predictor_names = predictors, target_name = "target",
-                                           vars = predictors,  metric = "auc") {
-  
-  #browser()
-  # Original performance
-  perf_orig = mysummary_class(data.frame(
-    y = df.for_varimp[[target_name]], 
-    yhat = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[[2]]))[metric]
-
-  # Permute
-  set.seed(999)
-  i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
-  start = Sys.time()
-  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
-                      .export = "mysummary_class") %dopar% 
-  {
-    #i=1
-    df.tmp = df.for_varimp
-    df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictor_names], type="prob")[[2]]  #predict
-    perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
-    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
-  }
-  print(Sys.time() - start)
-  # Calculate importance as scaled performance difference
-  df.varimp = df.varimp %>%
-    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
-    arrange(desc(importance))
-  df.varimp 
-}
-
-
-# Variable importance by permutation argument for regression
-get_varimp_by_permutation_regr = function(df.for_varimp = df.test, fit.for_varimp = fit,
-                                          predictor_names = predictors, target_name = "target",
-                                          vars = predictors, metric = "spearman") {
-  
-  #browser()
-  # Original performance
-  perf_orig = mysummary_regr(data.frame(
-    y = df.for_varimp[[target_name]], 
-    yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
-  
-  # Permute
-  set.seed(999)
-  i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
-  start = Sys.time()
-  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
-                      .export = "mysummary_regr") %dopar% 
-  {
-    #i=1
-    df.tmp = df.for_varimp
-    df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
-    perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
-    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
-  }
-  print(Sys.time() - start)
   # Calculate importance as scaled performance difference
   df.varimp = df.varimp %>%
     mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
@@ -846,7 +766,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     df.res = c()
     
     # Define grid to loop over
-    if(is.factor(df.for_partialdep[[vars[i]]])) values = levs[[vars[i]]] else values = quantiles[[vars[i]]]
+    if (is.factor(df.for_partialdep[[vars[i]]])) values = levs[[vars[i]]] else values = quantiles[[vars[i]]]
 
     # Loop over levels for nominal covariables or quantiles for metric covariables
     df.tmp = df.for_partialdep #save original data
@@ -856,7 +776,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
       print(value)
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
       if (is.factor(df.for_partialdep[[target_name]])) {
-        yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type="prob")[[2]] 
+        yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]] 
       } else {
         yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
       }
@@ -872,18 +792,21 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
 }
 
 
-
-
-# Partial Depdendence
+# Get plot list for partial dependance
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
                                ylim = c(0,1),
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Reference line
-  ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[[2]], 1, 0))
+  if (is.factor(df.for_partialdep[["target_name"]])) {
+    ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[[2]], 1, 0))
+  } else {
+    ref = mean(df.for_partialdep[[target_name]])
+  }
+  
   # Plot
   plots = map(vars, ~ {
-    #.x = vars[2]
+    #.x = vars[1]
 
     print(.x)
     
@@ -905,7 +828,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       plot = ggplot(df.ggplot, aes_string(x = .x, y = "yhat")) +
         geom_bar(stat = "identity", position = "identity", 
                  width = df.ggplot$width, color = "red", fill = alpha("red", 0.2)) +
-        labs(title = .x, x = "", y = expression(paste("P(", hat(y), "=1)"))) +
+        labs(title = .x, x = "", y = expression(hat(y))) +
         geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
         scale_x_discrete(labels = paste0(as.character(df.ggplot[[.x]]), " (", round(100 * df.ggplot[["prop"]],1), "%)")) +
         #scale_y_continuous(limits = ylim) +
@@ -930,7 +853,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         geom_point(aes_string(y = "yhat"), color = "red") +
         geom_rug(aes_string(.x), df.ggplot, sides = "b", col = "red") +
         geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
-        labs(title = .x, x = "", y = expression(paste("P(", hat(y), "=1)"))) +
+        labs(title = .x, x = "", y = expression(hat(y))) +
         #scale_y_continuous(limits = ylim) +
         coord_cartesian(ylim = ylim, expand = FALSE) +
         theme_my 
@@ -973,6 +896,44 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 }
 
 
+# Get plot list for xgboost explainer
+get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_test, 
+                              id_name = "id", type = "class", ylim = c(0.01, 0.99), 
+                              threshold = 1e-2) {
+  
+  # Prepare
+  df.ggplot = df.plot %>% 
+    gather_(key_col = "variable", value_col = "beta", gather_cols = setdiff(colnames(df.plot), id_name)) %>%  #rotate
+    mutate(variable = ifelse(variable != "intercept" & abs(beta) < threshold, "..... the rest", variable),
+           flag_intercept = ifelse(variable == "intercept", 1, 0)) %>%  
+    group_by_(id_name, "flag_intercept", "variable") %>% summarise(beta = sum(beta)) %>%  #summarise small effect
+    arrange_(id_name, "desc(flag_intercept)", "desc(abs(beta))") %>%  #sort descending inside id
+    left_join(gather_(df.values, key_col = "variable", value_col = "value", 
+                      gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
+    mutate(variable = ifelse(variable %in% c("intercept","..... the rest"), 
+                             variable, paste0(variable," = ",round(value,2))))
+  
+  plots = map(df.plot$id, ~ {
+    #.x = df.plot[1,"id"]
+    print(.x)
+    
+    df.waterfall = df.ggplot %>% filter_(paste0(id_name, "==", .x))
+    p = waterfall(values = df.waterfall$beta, rect_text_labels = round(df.waterfall$beta, 2), 
+                  labels = df.waterfall$variable, total_rect_text = round(sum(df.waterfall$beta), 2),
+                  calc_total = TRUE, total_axis_text = "Prediction") + 
+      labs(title = paste0(id_name, " = ", .x)) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            plot.title = element_text(hjust = 0.5)) 
+    if (type == "class") {
+      p = p + 
+        scale_y_continuous(labels = plogis, breaks = qlogis(seq(0, 100, 2)/100)) #, limits = qlogis(ylim)) 
+    } else {
+      p = p + coord_cartesian(ylim = ylim, expand = FALSE)
+    }
+    p 
+  })
+  plots  
+}
 
 # 
 # ## Plot Interactiontest
@@ -1152,44 +1113,44 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 # 
 
 
-
-# Animated Interaction of 2 metric variables
-plot_inter_active = function(outfile, vars = inter, df = df.interpret, fit = fit.gbm, duration = 15) {
-  
-  # Final model
-  model = fit$finalModel
-  
-  # Derive offset
-  offset = model$initF - plot(model, i.var = "INT", type = "link", return.grid = TRUE)[1,"y"]
-  
-  # Get interaction data
-  df.plot = plot(model, i.var = vars, type = "link", return.grid = TRUE) #get plot data on link level
-  p_sample = 1 - (1 - 1/(1 + exp(df.plot$y + offset))) #add offset and calcualte dependence on response level
-  df.plot$y = prob_samp2full(p_sample, b_sample, b_all) #switch to correct probability of full data
-  
-  # Prepare 3d plot
-  x = unique(df.plot[[vars[1]]])
-  y = unique(df.plot[[vars[2]]])
-  z = matrix(df.plot$y, length(x), length(y), byrow = FALSE)
-  nrz = nrow(z)
-  colcut = cut((z[-1, -1] + z[-1, -nrz] + z[-nrz, -1] + z[-nrz, -ncol(z)])/4, 100)
-  
-  # html Widget
-  persp3d(x, y, z, col = col3d[colcut], phi = 30, theta = 50, axes = T, ticktype = 'detailed',
-          xlab = vars[1], ylab = vars[2], zlab = "")
-  writeWebGL(dir = file.path(paste0(outfile)), width = 1000)
-  rgl.close()
-  
-  # animated gif
-  open3d("windowRect" = 2*c(20,20,400,400))
-  persp3d(x, y, z, col = col3d[colcut], phi = 30, theta = 50, axes = T, ticktype = 'detailed',
-          xlab = vars[1], ylab = vars[2], zlab = "")
-  movie3d(spin3d(axis = c(0,0,1), rpm = 2), duration = duration, convert = NULL, clean = TRUE, movie = "test",
-          dir = paste0(outfile))
-  rgl.close()
-  
-}
-
+# 
+# # Animated Interaction of 2 metric variables
+# plot_inter_active = function(outfile, vars = inter, df = df.interpret, fit = fit.gbm, duration = 15) {
+#   
+#   # Final model
+#   model = fit$finalModel
+#   
+#   # Derive offset
+#   offset = model$initF - plot(model, i.var = "INT", type = "link", return.grid = TRUE)[1,"y"]
+#   
+#   # Get interaction data
+#   df.plot = plot(model, i.var = vars, type = "link", return.grid = TRUE) #get plot data on link level
+#   p_sample = 1 - (1 - 1/(1 + exp(df.plot$y + offset))) #add offset and calcualte dependence on response level
+#   df.plot$y = prob_samp2full(p_sample, b_sample, b_all) #switch to correct probability of full data
+#   
+#   # Prepare 3d plot
+#   x = unique(df.plot[[vars[1]]])
+#   y = unique(df.plot[[vars[2]]])
+#   z = matrix(df.plot$y, length(x), length(y), byrow = FALSE)
+#   nrz = nrow(z)
+#   colcut = cut((z[-1, -1] + z[-1, -nrz] + z[-nrz, -1] + z[-nrz, -ncol(z)])/4, 100)
+#   
+#   # html Widget
+#   persp3d(x, y, z, col = col3d[colcut], phi = 30, theta = 50, axes = T, ticktype = 'detailed',
+#           xlab = vars[1], ylab = vars[2], zlab = "")
+#   writeWebGL(dir = file.path(paste0(outfile)), width = 1000)
+#   rgl.close()
+#   
+#   # animated gif
+#   open3d("windowRect" = 2*c(20,20,400,400))
+#   persp3d(x, y, z, col = col3d[colcut], phi = 30, theta = 50, axes = T, ticktype = 'detailed',
+#           xlab = vars[1], ylab = vars[2], zlab = "")
+#   movie3d(spin3d(axis = c(0,0,1), rpm = 2), duration = duration, convert = NULL, clean = TRUE, movie = "test",
+#           dir = paste0(outfile))
+#   rgl.close()
+#   
+# }
+# 
 
 
 #######################################################################################################################-
@@ -1204,12 +1165,12 @@ ms_boosttree$type = c("Regression","Classification")
 ms_boosttree$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE, 
              text = "parameter,class,label
-             numTrees,numeric,Boosting Interations
-             numLeaves,numeric,Number of Leaves
-             minSplit,numeric,Min Number for a leaf
-             learningRate,numeric,Shrinkage
-             featureFraction,numeric,features per tree
-             exampleFraction,numeric,rows per tree"                             
+             numTrees,numeric,numTrees
+             numLeaves,numeric,numLeaves
+             minSplit,numeric,minSplit
+             learningRate,numeric,learningRate
+             featureFraction,numeric,featureFraction
+             exampleFraction,numeric,exampleFractione"                             
   )
 
 ms_boosttree$grid = function(x, y, len = NULL, search = "grid") {
@@ -1254,7 +1215,7 @@ ms_boosttree$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
 
 ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
   #browser()
-  if(modelFit$problemType == "Classification") {
+  if (modelFit$problemType == "Classification") {
     out = rxPredict(modelFit, newdata)$Probability.Y
   } else {
     newdata$y = NA
@@ -1270,7 +1231,7 @@ ms_boosttree$prob = function(modelFit, newdata, submodels = NULL) {
   #browser()
   out = rxPredict(modelFit, newdata)[,"Probability.Y"]
   if (length(modelFit$obsLevels) == 2) {
-    out <- cbind(out, 1-out)
+    out <- cbind(out, 1 - out)
     colnames(out) <- c("Y","N")
   }
   out
@@ -1293,8 +1254,8 @@ ms_forest$type = c("Regression","Classification")
 ms_forest$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE,
              text = "parameter,class,label
-             numTrees,numeric,Number of Trees
-             splitFraction,numeric,Fraction of features in split"
+             numTrees,numeric,numTrees
+             splitFraction,numeric,splitFraction"
   )
 
 ms_forest$grid = function(x, y, len = NULL, search = "grid") {
@@ -1323,7 +1284,7 @@ ms_forest$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
 
 ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
   #browser()
-  if(modelFit$problemType == "Classification") {
+  if (modelFit$problemType == "Classification") {
     out = rxPredict(modelFit, newdata)$Probability.Y
   } else {
     newdata$y = NA
@@ -1338,7 +1299,7 @@ ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
 ms_forest$prob = function(modelFit, newdata, submodels = NULL) {
   out = rxPredict(modelFit, newdata)[,"Probability.Y"]
   if (length(modelFit$obsLevels) == 2) {
-    out <- cbind(out, 1-out)
+    out <- cbind(out, 1 - out)
     colnames(out) <- c("Y","N")
   }
   out
@@ -1350,6 +1311,143 @@ ms_forest$sort = function(x) {
   x[order(x$numTrees, x$splitFraction), ]
 }
 
+
+
+## lightgbm (boosted trees)
+
+lgbm = list()
+lgbm$label = "lightgbm"
+lgbm$library = "lightgbm"
+lgbm$type = c("Regression","Classification")
+lgbm$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE, 
+             text = "parameter,class,label
+             num_rounds,numeric,num_rounds
+             num_leaves,numeric,num_leaves
+             min_data_in_leaf,numeric,min_data_in_leaf
+             learning_rate,numeric,learning_rate
+             feature_fraction,numeric,feature_fraction
+             bagging_fraction,numeric,bagging_fraction"                             
+  )
+
+lgbm$grid = function(x, y, len = NULL, search = "grid") {
+  #browser()
+  if (search == "grid") {
+    out <- expand.grid(num_rounds = floor((1:len) * 50),
+                       num_leaves = 2^seq(1, len),
+                       min_data_in_leaf = 10,
+                       learning_rate = .1,
+                       feature_fraction = 0.7,
+                       bagging_fraction = 0.7)
+  } else {
+    out <- data.frame(num_rounds = floor(runif(len, min = 10, max = 5000)),
+                      num_leaves = 2 ^ sample(1:6, replace = TRUE, size = len), 
+                      min_data_in_leaf = 2 ^ sample(0:6, replace = TRUE, size = len),
+                      learning_rate = runif(len, min = .001, max = .6),
+                      feature_fraction = runif(len, min = .1, max = 1),
+                      bagging_fraction = runif(len, min = .1, max = 1)) 
+    out <- out[!duplicated(out),]
+  }
+  out
+}
+
+lgbm$loop = function(grid) {
+  #browser()
+  loop <- ddply(grid, 
+                c("learning_rate", "num_leaves", "feature_fraction", "min_data_in_leaf", "bagging_fraction"), 
+                function(x) c(num_rounds = max(x$num_rounds)))
+  submodels <- vector(mode = "list", length = nrow(loop))
+  for (i in seq(along = loop$num_rounds)) {
+    index <- which(grid$learning_rate == loop$learning_rate[i] &
+                   grid$num_leaves == loop$num_leaves[i] & 
+                   grid$feature_fraction == loop$feature_fraction[i] & 
+                   grid$min_data_in_leaf == loop$min_data_in_leaf[i] & 
+                   grid$bagging_fraction == loop$bagging_fraction[i])
+    trees <- grid[index, "num_rounds"]
+    submodels[[i]] <- data.frame(num_rounds = trees[trees != loop$num_rounds[i]])
+  }
+  list(loop = loop, submodels = submodels)
+}
+
+lgbm$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
+  #browser()
+  theDots = list(...)
+  if (is.factor(y)) y = as.numeric(y) - 1
+  if (is.factor(y)) objective = "binary" else objective = "regression_l2"
+  modArgs <- list(data = lgb.Dataset(as.matrix(x), label = y),
+                  num_rounds = param$num_rounds,
+                  num_leaves = param$num_leaves,
+                  min_data_in_leaf = param$min_data_in_leaf,
+                  learning_rate = param$learning_rate,
+                  feature_fraction = param$feature_fraction,
+                  bagging_fraction = param$bagging_fraction,
+                  objective = objective)
+  if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
+  list("model" = do.call("lightgbm", modArgs)) #put it into list as it is a S4 object!
+  
+}
+
+lgbm$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if (modelFit$problemType == "Classification") {
+    out = predict(modelFit$model, newdata)
+  } else {
+    out = predict(modelFit$model, newdata)
+  }
+  if (length(modelFit$obsLevels) == 2) {
+    out <- ifelse(out >= 0.5, "Y", "N")
+  }
+  if (!is.null(submodels)) {
+    tmp <- vector(mode = "list", length = nrow(submodels) + 1)
+    tmp[[1]] <- out
+    for (j in seq(along = submodels$num_rounds)) {
+      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$num_rounds[j])
+      if (modelFit$problemType == "Classification") {
+        out = predict(modelFit$model, newdata)
+      } else {
+        out = predict(modelFit$model, newdata)
+      }
+      if (length(modelFit$obsLevels) == 2) {
+        out <- ifelse(out >= 0.5, "Y", "N")
+      }
+      tmp[[j + 1]] <- tmp_pred
+    }
+    out <- tmp
+  }
+  out
+}
+
+
+lgbm$prob = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  out = predict(modelFit$model, newdata)
+  if (length(modelFit$obsLevels) == 2) {
+    out <- cbind(out, 1 - out)
+    colnames(out) <- c("Y","N")
+  }
+  if (!is.null(submodels)) {
+    tmp <- vector(mode = "list", length = nrow(submodels) + 1)
+    tmp[[1]] <- out
+    for (j in seq(along = submodels$num_rounds)) {
+      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$num_rounds[j])
+      if (length(modelFit$obsLevels) == 2) {
+        tmp_pred <- cbind(tmp_pred, 1 - tmp_pred)
+        colnames(tmp_pred) <- c("Y","N")
+      }
+      tmp_pred <- as.data.frame(tmp_pred)
+      tmp[[j + 1]] <- tmp_pred
+    }
+    out <- tmp
+  }
+  out
+}
+
+lgbm$levels = function(x) {c("N","Y")}
+
+lgbm$sort = function(x) {
+  x[order(x$num_rounds, x$num_leaves, x$learning_rate, x$feature_fraction, 
+          x$bagging_fraction), ]
+}
 
 
 

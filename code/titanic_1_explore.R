@@ -1,9 +1,4 @@
-type = "regr"
-if (type == "class") {
-  
-} else {
-  
-}
+
 #######################################################################################################################-
 #|||| Initialize ||||----
 #######################################################################################################################-
@@ -20,16 +15,25 @@ source("./code/0_init.R")
 
 # Read data --------------------------------------------------------------------------------------------------------
 
-df.orig = read_csv(paste0(dataloc,"thyroid.csv"), col_names = TRUE) %>% filter(!is.na(T3)) 
+df.orig = read_csv(paste0(dataloc,"titanic.csv"), col_names = TRUE)
 skip = function() {
   # Check some stuff
   df.tmp = df.orig %>% mutate_if(is.character, as.factor) 
   summary(df.tmp)
-  table(df.orig$Class) / nrow(df.orig)
+  table(df.orig$survived) / nrow(df.orig)
 }
 
 # "Save" orignial data
-df = df.orig 
+df = df.orig
+
+
+
+
+# Feature engineering -------------------------------------------------------------------------------------------------------------
+
+df$deck = as.factor(str_sub(df$cabin, 1, 1))
+summary(df$deck)
+# also possible: df$familysize = df$sibsp + df$parch as well as something with title from name
 
 
 
@@ -37,14 +41,9 @@ df = df.orig
 # Define target and train/test-fold ----------------------------------------------------------------------------------
 
 # Target
-if (type == "class") {
-  df = mutate(df, target = factor(ifelse(Class == "negative", "N", "Y"), levels = c("N","Y")),
-                  target_num = ifelse(target == "N", 0 ,1))
-  summary(df[c("target","target_num")])
-} else {
-  df$target = df$T3
-  summary(df$target)
-}
+df = mutate(df, target = factor(ifelse(survived == 0, "N", "Y"), levels = c("N","Y")),
+                target_num = ifelse(target == "N", 0 ,1))
+summary(df[c("target","target_num")])
 
 # Train/Test fold: usually split by time
 df$fold = factor("train", levels = c("train", "test"))
@@ -61,7 +60,7 @@ summary(df$fold)
 
 # Define metric covariates -------------------------------------------------------------------------------------
 
-metr = c("age","TSH","TT4","T4U","FTI") # NOT USED: "TBG" -> only missings
+metr = c("age","fare") 
 summary(df[metr]) 
 
 
@@ -75,7 +74,6 @@ df[metr_binned] = map(df[metr], ~ {
 })
 # Convert missings to own level ("(Missing)")
 df[metr_binned] = map(df[metr_binned], ~ fct_explicit_na(., na_level = "(Missing)"))
-summary(df[metr_binned],11)
 
 
 
@@ -92,6 +90,8 @@ summary(df[metr])
 # Create mising indicators
 (miss = metr[map_lgl(df[metr], ~ any(is.na(.)))])
 df[paste0("MISS_",miss)] = map(df[miss], ~ as.factor(ifelse(is.na(.x), "miss", "no_miss")))
+# tmp = df %>% mutate_at(miss, funs("MISS" = as.factor(ifelse(is.na(.), "miss", "no_miss")))) %>% 
+#   rename_(.dots = setNames(as.list(paste0(miss,"_MISS")), paste0("MISS_",miss)))
 summary(df[,paste0("MISS_",miss)])
 
 # Impute missings with randomly sampled value (or median, see below)
@@ -109,13 +109,9 @@ summary(df[metr])
 # Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
-if (type == "class") {
-  plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
-} else {
-  plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,8))) 
-}
-ggsave(paste0(plotloc, "distr_metr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
-       width = 18, height = 12)
+plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
+ggsave(paste0(plotloc, "titanic_distr_metr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 2, nrow = 2, top = NULL)), 
+       width = 12, height = 8)
 
 # Winsorize
 df[,metr] = map(df[metr], ~ {
@@ -127,7 +123,7 @@ df[,metr] = map(df[metr], ~ {
 )
 
 # Log-Transform
-tolog = c("TSH")
+tolog = c("fare")
 df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
 metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
 # for (varname in tolog) { 
@@ -136,27 +132,10 @@ metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr a
 # }
 names(misspct) = metr #adapt misspct names
 
-
-
-
-# Final variable information --------------------------------------------------------------------------------------------
-
-# Univariate variable importance
-if (type == "class") {
-  varimp = filterVarImp(df[metr], df$target, nonpara = TRUE) %>% 
-    mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
-} else {
-  varimp = sqrt(filterVarImp(df[metr], df$target, nonpara = TRUE)) %>% .$Overall
-}
-names(varimp) = metr
-
-# Plot 
-if (type == "class") {
-  plots = get_plot_distr_metr_class(df, metr, missinfo = misspct, varimpinfo = varimp)
-} else {
-  plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,8))) 
-}
-ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), width = 18, height = 12)
+# Plot again
+plots = get_plot_distr_metr_class(df, metr, missinfo = misspct)
+ggsave(paste0(plotloc, "titanic_distr_metr_final.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
+       width = 12, height = 8)
 
 
 
@@ -168,8 +147,8 @@ metr = setdiff(metr, "xxx")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
-plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0.2)
-ggsave(paste0(plotloc, "corr_metr.pdf"), plot, width = 12, height = 12)
+plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0)
+ggsave(paste0(plotloc, "titanic_corr_metr.pdf"), plot, width = 6, height = 6)
 metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
 metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables to remove
 
@@ -182,8 +161,7 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 
 # Define nominal covariates -------------------------------------------------------------------------------------
 
-nomi = c("sex","on_thyroxine","query_on_thyroxine","on_antithyroid_medication","sick","pregnant","thyroid_surgery",
-         "I131_treatment","query_hypothyroid","lithium","goitre","tumor","psych","referral_source")  
+nomi = c("pclass","sex","sibsp","parch","deck","embarked","boat","home.dest")
 nomi = union(nomi, paste0("MISS_",miss)) #Add missing indicators
 df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
 summary(df[nomi])
@@ -198,7 +176,7 @@ df[nomi] = map(df[nomi], ~ fct_explicit_na(.))
 summary(df[nomi])
 
 # Create compact covariates for "too many members" columns 
-topn_toomany = 4
+topn_toomany = 30
 levinfo = map_int(df[nomi], ~ length(levels(.))) 
 levinfo[order(levinfo, decreasing = TRUE)]
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
@@ -207,22 +185,10 @@ df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, oth
 nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange name
 summary(df[nomi], topn_toomany + 2)
 
-# Univariate variable importance
-if (type == "class") {
-  varimp = filterVarImp(df[nomi], df$target, nonpara = TRUE) %>% 
-    mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
-} else {
-  varimp = sqrt(filterVarImp(df[nomi], df$target, nonpara = TRUE)) %>% .$Overall
-}
-names(varimp) = nomi
-
 # Check
-if (type == "class") {
-  plots = get_plot_distr_nomi_class(df, nomi)
-} else {
-  plots = get_plot_distr_nomi_regr(df, nomi) 
-}
-ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3, top = NULL), width = 18, height = 12)
+plots = get_plot_distr_nomi_class(df, nomi)
+ggsave(paste0(plotloc, "titanic_distr_nomi.pdf"), marrangeGrob(plots, ncol = 3, nrow = 2, top = NULL), 
+       width = 18, height = 12)
 
 
 
@@ -230,12 +196,12 @@ ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3
 # Removing variables ----------------------------------------------------------------------------------------------
 
 # Remove Self-predictors
-nomi = setdiff(nomi, "xxx")
+nomi = setdiff(nomi, "boat")
 
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = 0)
-ggsave(paste0(plotloc, "corr_nomi.pdf"), plot, width = 12, height = 12)
-nomi = setdiff(nomi, "MISS_FTI")
+ggsave(paste0(plotloc, "titanic_corr_nomi.pdf"), plot, width = 12, height = 12)
+nomi = setdiff(nomi, "xxx")
 
 
 
@@ -262,7 +228,7 @@ setdiff(predictors_binned, colnames(df))
 
 # Save image ----------------------------------------------------------------------------------------------------------
 
-save.image("1_explore.rdata")
+save.image("titanic_1_explore.rdata")
 
 
 

@@ -1,4 +1,9 @@
-
+type = "regr"
+if (type == "class") {
+  
+} else {
+  
+}
 #######################################################################################################################-
 #|||| Initialize ||||----
 #######################################################################################################################-
@@ -18,21 +23,34 @@ registerDoParallel(cl)
 
 
 
-# Undersample data --------------------------------------------------------------------------------------------
-
-# Just take data from train fold
-summary(df[df$fold == "train", "target"])
-df.train = c()
-for (i in 1:2) {
-  i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
-  set.seed(i*123)
-  df.train = bind_rows(df.train, df[sample(i.samp, min(1000, length(i.samp))),]) #take all but 1000 at most
+if (type == "class") {
+  # Undersample data --------------------------------------------------------------------------------------------
+  # Just take data from train fold
+  summary(df[df$fold == "train", "target"])
+  df.train = c()
+  for (i in 1:2) {
+    i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
+    set.seed(i*123)
+    df.train = bind_rows(df.train, df[sample(i.samp, min(1000, length(i.samp))),]) #take all but 1000 at most
+  }
+  summary(df.train$target)
+  
+  # Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
+  b_all = mean(df %>% filter(fold == "train") %>% .$target_num)
+  b_sample = mean(df.train$target_num)
+  
+  # Set metric for peformance comparison
+  metric = "auc"
+} else {
+  # Sample data --------------------------------------------------------------------------------------------
+  
+  # Just take data from train fold
+  df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
+  
+  # Set metric for peformance comparison
+  metric = "spearman"
 }
-summary(df.train$target)
 
-# Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
-b_all = mean(df %>% filter(fold == "train") %>% .$target_num)
-b_sample = mean(df.train$target_num)
 
 # Define test data
 df.test = df %>% filter(fold == "test")
@@ -45,15 +63,29 @@ df.test = df %>% filter(fold == "test")
 #######################################################################################################################-
 
 ## Validation information
-metric = "auc"
+if (type == "class") {
+  metric = "auc"
+  
+  set.seed(999)
+  ctrl_cv = trainControl(method = "repeatedcv", number = 4, repeats = 1, returnResamp = "final",
+                         summaryFunction = mysummary_class, classProbs = TRUE) #NOT USED
+  l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
+  ctrl_index_fff = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
+                                summaryFunction = mysummary_class, classProbs = TRUE, 
+                                indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
+} else {
+  metric = "spearman"
+  
+  set.seed(999)
+  ctrl_cv = trainControl(method = "repeatedcv", number = 4, repeats = 1, returnResamp = "final",
+                         summaryFunction = mysummary_regr) #NOT USED
+  l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
+  ctrl_index_fff = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
+                                summaryFunction = mysummary_regr, 
+                                indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
+}
 
-set.seed(999)
-ctrl_cv = trainControl(method = "repeatedcv", number = 4, repeats = 1, returnResamp = "final",
-                       summaryFunction = mysummary_class, classProbs = TRUE) #NOT USED
-l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
-ctrl_index_fff = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
-                              summaryFunction = mysummary_class, classProbs = TRUE, 
-                              indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
+
 
 
 ## Fits
@@ -64,7 +96,7 @@ fit = train(formula_binned, data = df.train[c("target",predictors_binned)],
             tuneGrid = expand.grid(alpha = c(0,0.2,0.4,0.6,0.8,1), lambda = 2^(seq(-3, -10, -1))),
             #tuneLength = 20, 
             preProc = c("center","scale")) 
-plot(fit, ylim = c(0.95,1))
+plot(fit, ylim = c(0.49,0.51))
 # -> keep alpha=1 to have a full Lasso
 
 
@@ -87,7 +119,7 @@ fit = train(df.train[predictors], df.train$target,
             trControl = ctrl_index_fff, metric = metric, 
             method = "rf", 
             tuneGrid = expand.grid(mtry = seq(1,length(predictors),3)), 
-            ntree = 500) #use the Dots (...) for explicitly specifiying randomForest parameter
+            ntree = 200) #use the Dots (...) for explicitly specifiying randomForest parameter
 plot(fit)
 # -> keep around the recommended values: mtry = floor(sqrt(length(predictors)))
 
@@ -112,25 +144,40 @@ plot(fit)
 # -> max_depth = 3, shrinkage = 0.01, colsample_bytree = subsample = 0.7, n.minobsinnode = 5
 
 
-fit = train(df.train[,predictors], df.train$target, 
+# fit = train(df.train[,predictors], df.train$target, 
+#             trControl = ctrl_index_fff, metric = metric, 
+#             method = ms_boosttree, 
+#             tuneGrid = expand.grid(numTrees = seq(100,1100,500), numLeaves = c(10,20),  
+#                                    learningRate = c(0.1,0.01), featureFraction = c(0.5,0.7),  
+#                                    minSplit = c(5,10), exampleFraction = c(0.5,0.7)),
+#             verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+# plot(fit)
+# # -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
+# 
+# 
+# fit = train(df.train[,predictors], df.train$target, 
+#             trControl = ctrl_index_fff, metric = metric, 
+#             method = ms_forest, 
+#             tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
+#             verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+# plot(fit)
+# # -> splitFraction = 0.3
+
+
+fit = train(formula, data = as.data.frame(df.train[c("target",predictors)]),
             trControl = ctrl_index_fff, metric = metric, 
-            method = ms_boosttree, 
-            tuneGrid = expand.grid(numTrees = seq(100,1100,500), numLeaves = c(10,20),  
-                                   learningRate = c(0.1,0.01), featureFraction = c(0.5,0.7),  
-                                   minSplit = c(5,10), exampleFraction = c(0.5,0.7)),
-            verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
+            method = lgbm, 
+            # tuneGrid = expand.grid(num_rounds = c(50,100,200), num_leaves = 10,  
+            #                        learning_rate = .1, feature_fraction = .7,  
+            #                        min_data_in_leaf = 5, bagging_fraction = .7),
+            tuneGrid = expand.grid(num_rounds = seq(100,1100,100), num_leaves = c(10,20),
+                                   learning_rate = c(0.1,0.01), feature_fraction = c(0.5,0.7),
+                                   min_data_in_leaf = c(5,10), bagging_fraction = c(0.5,0.7)),
+            max_depth = 3,
+            verbose = 0) 
+
 plot(fit)
 # -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
-
-
-fit = train(df.train[,predictors], df.train$target, 
-            trControl = ctrl_index_fff, metric = metric, 
-            method = ms_forest, 
-            tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
-            verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
-plot(fit)
-# -> splitFraction = 0.3
-
 
 
 ## Special plotting
@@ -141,12 +188,17 @@ varImp(fit)
 
 skip = function() {
   
-  y = "auc"
-  x = "nrounds"; #x = "numTrees"
-  color = "as.factor(max_depth)" ; #color = "as.factor(numLeaves)"
-  linetype =  "as.factor(eta)"; #linetype =  "as.factor(learningRate)"
-  shape = "as.factor(min_child_weight)"; #shape = "as.factor(minSplit)"
-  facet = "min_child_weight ~ subsample + colsample_bytree";  #facet = "minSplit ~ exampleFraction + featureFraction"
+  y = metric
+  
+  # xgboost
+  x = "nrounds"; color = "as.factor(max_depth)"; linetype = "as.factor(eta)"; 
+  shape = "as.factor(min_child_weight)"; facet = "min_child_weight ~ subsample + colsample_bytree"
+  # ms_boosttree
+  x = "numTrees"; color = "as.factor(numLeaves)"; linetype = "as.factor(learningRate)";
+  shape = "as.factor(minSplit)"; facet = "minSplit ~ exampleFraction + featureFraction"
+  # lgbm
+  x = "num_rounds"; color = "as.factor(num_leaves)"; linetype = "as.factor(learning_rate)";  
+  shape = "as.factor(min_data_in_leaf)"; facet = "min_data_in_leaf ~ bagging_fraction + feature_fraction"
   
   # Plot tuning result with ggplot
   fit$results %>% 
@@ -187,11 +239,15 @@ perfcomp = function(method, nsim = 5) {
     df.train = df.comp[-i.holdout,]    
     
     # Control for train
-    metric = "auc"
     set.seed(999)
     l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
-    ctrl_index = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
-                              summaryFunction = mysummary_class, classProbs = TRUE)
+    if (type == "class") {
+      ctrl_index = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
+                                summaryFunction = mysummary_class, classProbs = TRUE)
+    } else {
+      ctrl_index = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
+                                summaryFunction = mysummary_regr)      
+    }
     
     
     ## Fit data
@@ -269,12 +325,22 @@ perfcomp = function(method, nsim = 5) {
     ## Get metrics
     
     # Calculate holdout performance
-    if (method %in% c("glmnet","glm")) {
-      yhat_holdout = predict(fit, df.holdout[predictors_binned], type = "prob")[[2]] 
-    } else  {
-      yhat_holdout = predict(fit, df.holdout[predictors], type = "prob")[[2]] 
+    if (type == "class") {
+      if (method %in% c("glmnet","glm")) {
+        yhat_holdout = predict(fit, df.holdout[predictors_binned], type = "prob")[[2]] 
+      } else  {
+        yhat_holdout = predict(fit, df.holdout[predictors], type = "prob")[[2]] 
+      }
+      perf_holdout = mysummary_class(data.frame(y = df.holdout$target, yhat = yhat_holdout))
+    } else {
+      if (method %in% c("glmnet","glm")) {
+        yhat_holdout = predict(fit, df.holdout[predictors_binned]) 
+      } else  {
+        yhat_holdout = predict(fit, df.holdout[predictors]) 
+      }
+      perf_holdout = mysummary_regr(data.frame(y = df.holdout$target, yhat = yhat_holdout))
     }
-    perf_holdout = mysummary_class(data.frame(y = df.holdout$target, yhat = yhat_holdout))
+
 
     # Put all together
     result = rbind(result, data.frame(sim = sim, method = method, t(perf_holdout)))
@@ -289,7 +355,6 @@ perfcomp = function(method, nsim = 5) {
 
 df.result = as.data.frame(c())
 nsim = 5
-a =  perfcomp(method = "glmnet", nsim = nsim)
 df.result = bind_rows(df.result, perfcomp(method = "glmnet", nsim = nsim) )   
 df.result = bind_rows(df.result, perfcomp(method = "glm", nsim = nsim) )     
 df.result = bind_rows(df.result, perfcomp(method = "rpart", nsim = nsim))      
@@ -304,7 +369,7 @@ df.result$method = factor(df.result$method, levels = unique(df.result$method))
 
 #---- Plot simulation --------------------------------------------------------------------------------------------
 
-p = ggplot(df.result, aes(x = method, y = auc)) + 
+p = ggplot(df.result, aes_string(x = "method", y = metric)) + 
   geom_boxplot() + 
   geom_point(aes(color = sim), shape = 15) +
   geom_line(aes(color = sim, group = sim), linetype = 2) +
@@ -362,24 +427,41 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
   print(Sys.time() - tmp)
   
   
-  
-  ## Score (needs rescale to prior probs)
-  # Train data 
-  y_train = df.train[i.train,]$target
-  (b_sample = (summary(y_train) / length(y_train))[[2]]) #new b_sample
-  yhat_train = prob_samp2full(predict(fit, df.train[i.train,predictors], type = "prob")[[2]],
-                              b_sample, b_all)
-  
-  # Test data 
-  y_test = df.test$target
-  l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
-  yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %do% {
-    # Scoring in chunks due to high memory consumption of xgboost
-    yhat = predict(fit, df.test[l.split[[i]],predictors], type = "prob")[[2]]
-    gc()
-    yhat
+  if (type == "class") {
+    ## Score (needs rescale to prior probs)
+    # Train data 
+    y_train = df.train[i.train,]$target
+    (b_sample = (summary(y_train) / length(y_train))[[2]]) #new b_sample
+    yhat_train = prob_samp2full(predict(fit, df.train[i.train,predictors], type = "prob")[[2]],
+                                b_sample, b_all)
+    
+    # Test data 
+    y_test = df.test$target
+    l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
+    yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %do% {
+      # Scoring in chunks due to high memory consumption of xgboost
+      yhat = predict(fit, df.test[l.split[[i]],predictors], type = "prob")[[2]]
+      gc()
+      yhat
+    }
+    yhat_test = prob_samp2full(yhat_test, b_sample, b_all)
+  } else {
+    ## Score 
+    # Train data 
+    y_train = df.train[i.train,]$target
+    yhat_train = predict(fit, df.train[i.train,predictors])
+    
+    # Test data 
+    y_test = df.test$target
+    l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
+    yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %do% {
+      # Scoring in chunks due to high memory consumption of xgboost
+      yhat = predict(fit, df.test[l.split[[i]],predictors])
+      gc()
+      yhat
+    }
   }
-  yhat_test = prob_samp2full(yhat_test, b_sample, b_all)
+  
 
   # Bind together
   res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.train)),
@@ -400,7 +482,7 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
 
 #---- Plot results --------------------------------------------------------------------------------------
 
-p = ggplot(df.obsneed, aes(numtrainobs, auc, color = fold)) +
+p = ggplot(df.obsneed, aes_string("numtrainobs", metric, color = "fold")) +
   geom_line() +
   geom_point() +
   scale_color_manual(values = c("#F8766D", "#00BFC4")) 
