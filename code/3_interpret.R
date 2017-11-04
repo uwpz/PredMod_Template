@@ -226,11 +226,11 @@ fit_top = train(formula_top, data = df.train[c("target",predictors_top)],
 
 # Plot performance
 if (type == "class") {
-  tmp = prob_samp2full(predict(fit_top, df.test[predictors], type = "prob")[["Y"]], b_sample, b_all)
+  tmp = prob_samp2full(predict(fit_top, df.test[predictors_top], type = "prob")[["Y"]], b_sample, b_all)
   plots = get_plot_performance_class(yhat = tmp, y = df.test$target, reduce_factor = NULL)
   
 } else {
-  tmp = predict(fit, df.test[predictors])
+  tmp = predict(fit_top, df.test[predictors_top])
   plots = get_plot_performance_regr(yhat = tmp, y = df.test$target)
 }
 plots[1]

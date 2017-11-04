@@ -1,6 +1,9 @@
 
 #TODO: 
+# split class und regr
 # interactions by glmnet argument
+# absolute and relative residuals for performance plot regression
+# ylim optional in get_plot_partialdep
 
 
 #######################################################################################################################-
@@ -795,7 +798,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
 # Get plot list for partial dependance
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
-                               ylim = c(0,1),
+                               ylim = NULL,
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Reference line
   if (is.factor(df.for_partialdep[[target_name]])) {
@@ -899,7 +902,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 # Get plot list for xgboost explainer
 get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_test, 
                               id_name = "id", type = "class", ylim = c(0.01, 0.99), 
-                              threshold = 1e-2) {
+                              threshold = 1e-3) {
   
   # Prepare
   df.ggplot = df.plot %>% 
