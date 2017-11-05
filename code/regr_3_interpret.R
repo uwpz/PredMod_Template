@@ -19,24 +19,13 @@ registerDoParallel(cl)
 
 
 
-# Undersample data --------------------------------------------------------------------------------------------
+# Sample data --------------------------------------------------------------------------------------------
 
 # Just take data from train fold
-summary(df[df$fold == "train", "target"])
-df.train = c()
-for (i in 1:2) {
-  i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
-  set.seed(i*123)
-  df.train = bind_rows(df.train, df[sample(i.samp, min(1000, length(i.samp))),]) #take all but 1000 at most
-}
-summary(df.train$target)
-
-# Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
-b_all = mean(df %>% filter(fold == "train") %>% .$target_num)
-b_sample = mean(df.train$target_num)
+df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
 
 # Set metric for peformance comparison
-metric = "auc"
+metric = "spearman"
 
 # Define test data
 df.test = df %>% filter(fold == "test")
@@ -61,25 +50,23 @@ fit = train( formula, data = df.train[c("target",predictors)],
 Sys.time() - tmp
 
 # Predict
-yhat_test_unscaled = predict(fit, df.test[predictors], type = "prob")[["Y"]]
-summary(yhat_test_unscaled)
+yhat_test = predict(fit, df.test[predictors])
+summary(yhat_test)
 skip = function() {
   # Predict in parallel (to keep memory consumption small)
   l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
-  yhat_test_unscaled = foreach(i = 1:length(l.split), .combine = bind_rows) %dopar% {
-    predict(fit, df.test[l.split[[i]],predictors], type = "prob")[["Y"]]
+  yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %dopar% {
+    predict(fit, df.test[l.split[[i]],predictors])
   }
 }
-
-# Rescale to non-undersampled data
-yhat_test = prob_samp2full(yhat_test_unscaled, b_sample, b_all)
 y_test = df.test$target
 
 # Plot performance
-mysummary_class(data.frame(yhat = yhat_test, y = y_test))
-plots = get_plot_performance_class(yhat = yhat_test, y = y_test, reduce_factor = NULL)
+mysummary_regr(data.frame(yhat = yhat_test, y = y_test))
+plots = get_plot_performance_regr(yhat = yhat_test, y = y_test, quantiles = seq(0, 1, 0.05))
 ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
+
 
 
 
@@ -87,14 +74,14 @@ ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 
 #---- Check residuals ----------------------------------------------------------------------------------
 
 # Residuals
-df.test$residual = as.numeric(y_test) - 1 - yhat_test
-df.test$abs_residual = abs(as.numeric(y_test) - 1 - yhat_test)
+df.test$residual = y_test - yhat_test
 summary(df.test$residual)
-plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-1,1))), 
+plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-3,3))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = c(-1,1)))
 ggsave(paste0(plotloc, "diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 # Absolute residuals
+df.test$abs_residual = abs(y_test - yhat_test)
 summary(df.test$abs_residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "abs_residual", ylim = c(0,1)))
@@ -106,8 +93,9 @@ ggsave(paste0(plotloc, "diagnosis_absolute_residual.pdf"), marrangeGrob(plots, n
 
 
 #---- Do some bootstrapped fits ----------------------------------------------------------------------------------
+
 n.boot = 5
-l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dopar% { 
+l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret")) %dopar% { 
   
   # Bootstrap
   set.seed(i*1234)
@@ -116,24 +104,23 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dop
   df.boot = df.train[i.boot,]
   
   # Fit
-  fit = train( formula, data = df.boot[c("target",predictors)], 
-               trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
-               method = "xgbTree",
-               tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                      eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                      min_child_weight = c(10), subsample = c(0.7)))
-  yhat = predict(fit, df.train[i.oob,predictors], type = "prob")[["Y"]]
-  auc = as.numeric((mysummary_class(data.frame(yhat = yhat, y = df.train[i.oob, "target"][[1]])))["auc"])
-  return(setNames(list(fit, auc), c(paste0("fit_",i), c(paste0("auc_",i)))))
+  fit = train(formula, data = df.boot[c("target",predictors)], 
+              trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
+              method = "xgbTree",
+              tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
+                                     eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
+                                     min_child_weight = c(10), subsample = c(0.7)))
+  yhat = predict(fit, df.train[i.oob,predictors])
+  spearman = cor(yhat, df.train[i.oob, "target"][[1]], method = "spearman")
+  return(setNames(list(fit, spearman), c(paste0("fit_",i), c(paste0("spearman_",i)))))
 }
 
 # Is it stable?
-map_dbl(1:n.boot, ~ l.boot[[paste0("auc_",.)]]) #on Out-of-bag data
-map_df(1:n.boot, ~ {
-  yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], df.test[predictors], type = "prob")[["Y"]]
-  yhat = prob_samp2full(yhat_unscaled, b_sample, b_all)
-  data.frame(t(mysummary_class(data.frame(yhat = prob_samp2full(yhat_unscaled, b_sample, b_all), y = df.test$target)))) 
-})
+map_dbl(1:n.boot, ~ l.boot[[paste0("spearman_",.)]]) #on Out-of-bag data
+map_df(1:n.boot, ~ data.frame(t(
+  mysummary_regr(data.frame(yhat = predict(l.boot[[paste0("fit_",.)]], df.test[predictors]), 
+                            y = df.test$target)))
+)) 
 
 
 
@@ -154,8 +141,8 @@ fit_top = train(formula_top, data = df.train[c("target",predictors_top)],
                                        min_child_weight = c(10), subsample = c(0.7)))
 
 # Plot performance
-tmp = prob_samp2full(predict(fit_top, df.test[predictors_top], type = "prob")[["Y"]], b_sample, b_all)
-plots = get_plot_performance_class(yhat = tmp, y = df.test$target, reduce_factor = NULL)
+tmp = predict(fit_top, df.test[predictors_top])
+plots = get_plot_performance_regr(yhat = tmp, y = df.test$target)
 plots[1]
 
 
@@ -203,7 +190,7 @@ for (i in 1:n.boot) {
 
 
 
-# Plot
+## Plot
 plot = get_plot_varimp(df.varimp, topn_vars, df.plot_boot = df.varimp_boot)
 ggsave(paste0(plotloc, "variable_importance.pdf"), plot, w = 8, h = 6)
 
@@ -220,11 +207,8 @@ levs = map(df.test[nomi], ~ levels(.))
 quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
 df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
 
-# Rescale
-df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
-
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,0.3))
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(1,4))
 ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
@@ -243,13 +227,10 @@ for (i in 1:n.boot) {
                 mutate(run = i))
 }
 
-# Rescale
-df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample, b_all)
-
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,0.3))
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(1,4))
 ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
@@ -270,11 +251,7 @@ m.model_test = model.matrix(formula, data = df.train[c("target",predictors)], co
 m.test = xgb.DMatrix(m.model_test)
 
 # Create explainer data table from train data
-df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
-
-# Switch coefficients (as explainer takes "N" as target = 1)
-cols = setdiff(colnames(df.explainer), c("leaf","tree"))
-df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
+df.explainer = buildExplainer(fit$finalModel, m.train, type = "regression")
 
 # Get predictions for all test data
 df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
@@ -287,7 +264,8 @@ df.model_test$id = 1:nrow(df.model_test)
 
 
 ## Plot
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
+plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "regr", 
+                           ylim = c(1,3))
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 

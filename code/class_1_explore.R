@@ -3,7 +3,7 @@
 #|||| Initialize ||||----
 #######################################################################################################################-
 
-# Load functions
+# Load libraries and functions
 source("./code/0_init.R")
 
 
@@ -18,12 +18,13 @@ source("./code/0_init.R")
 df.orig = read_csv(paste0(dataloc,"thyroid.csv"), col_names = TRUE)
 skip = function() {
   # Check some stuff
-  df.orig %>% mutate_if(is.character, as.factor) %>% summary()
-  table(df.orig$Class) / nrow(df.orig)
+  df.tmp = df.orig %>% mutate_if(is.character, as.factor) 
+  summary(df.tmp)
+  table(df.tmp$Class) / nrow(df.tmp)
 }
 
-# "Save" orignial data
-df = df.orig %>% filter(!is.na(T3)) 
+# "Save" original data
+df = df.orig 
 
 
 
@@ -31,14 +32,14 @@ df = df.orig %>% filter(!is.na(T3))
 # Define target and train/test-fold ----------------------------------------------------------------------------------
 
 # Target
-df$target = df$T3 #for regression
-summary(df$target)
-hist(df$target, breaks = 20)
+df = mutate(df, target = factor(ifelse(Class == "negative", "N", "Y"), levels = c("N","Y")),
+            target_num = ifelse(target == "N", 0 ,1))
+summary(df[c("target","target_num")])
 
 # Train/Test fold: usually split by time
 df$fold = factor("train", levels = c("train", "test"))
 set.seed(123)
-df[sample(1:nrow(df), floor(0.4*nrow(df))),"fold"] = "test"
+df[sample(1:nrow(df), floor(0.3*nrow(df))),"fold"] = "test"
 summary(df$fold)
 
 
@@ -50,20 +51,22 @@ summary(df$fold)
 
 # Define metric covariates -------------------------------------------------------------------------------------
 
-metr = c("age","TSH","TT4","T4U","FTI") #for regression
+metr = c("age","TSH","TT4","T4U","FTI","T3") # NOT USED: "TBG" -> only missings
 summary(df[metr]) 
 
 
 
 
-# Create nominal variables for all metric variables (for glmnet) before imputing -------------------------------
+# Create nominal variables for all metric variables (for linear models) before imputing -------------------------------
 
 metr_binned = paste0(metr,"_BINNED_")
 df[metr_binned] = map(df[metr], ~ {
   cut(., unique(quantile(., seq(0,1,0.1), na.rm = TRUE)), include.lowest = TRUE)
 })
+
 # Convert missings to own level ("(Missing)")
 df[metr_binned] = map(df[metr_binned], ~ fct_explicit_na(., na_level = "(Missing)"))
+summary(df[metr_binned],11)
 
 
 
@@ -80,8 +83,6 @@ summary(df[metr])
 # Create mising indicators
 (miss = metr[map_lgl(df[metr], ~ any(is.na(.)))])
 df[paste0("MISS_",miss)] = map(df[miss], ~ as.factor(ifelse(is.na(.x), "miss", "no_miss")))
-# tmp = df %>% mutate_at(miss, funs("MISS" = as.factor(ifelse(is.na(.), "miss", "no_miss")))) %>% 
-#   rename_(.dots = setNames(as.list(paste0(miss,"_MISS")), paste0("MISS_",miss)))
 summary(df[,paste0("MISS_",miss)])
 
 # Impute missings with randomly sampled value (or median, see below)
@@ -99,8 +100,8 @@ summary(df[metr])
 # Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
-plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,6))) 
-ggsave(paste0(plotloc, "distr_metr_regr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
+plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
+ggsave(paste0(plotloc, "distr_metr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2)), 
        width = 18, height = 12)
 
 # Winsorize
@@ -122,23 +123,33 @@ metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr a
 # }
 names(misspct) = metr #adapt misspct names
 
-# Plot again
-plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,6))) 
-ggsave(paste0(plotloc, "distr_metr_regr_final.pdf"), 
-       suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
-       width = 18, height = 12)
+
+
+
+# Final variable information --------------------------------------------------------------------------------------------
+
+# Univariate variable importance
+varimp = filterVarImp(df[metr], df$target, nonpara = TRUE) %>% 
+  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+names(varimp) = metr
+varimp[order(varimp, decreasing = TRUE)]
+
+# Plot 
+plots = get_plot_distr_metr_class(df, metr, missinfo = misspct, varimpinfo = varimp)
+ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), width = 18, height = 12)
+
 
 
 
 # Removing variables -------------------------------------------------------------------------------------------
 
 # Remove Self predictors
-metr = setdiff(metr, "xxx")
+metr = setdiff(metr, "T3")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
 plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0.2)
-ggsave(paste0(plotloc, "corr_metr_regr.pdf"), plot, width = 12, height = 12)
+ggsave(paste0(plotloc, "corr_metr.pdf"), plot, width = 8, height = 8)
 metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
 metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables to remove
 
@@ -152,8 +163,7 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 # Define nominal covariates -------------------------------------------------------------------------------------
 
 nomi = c("sex","on_thyroxine","query_on_thyroxine","on_antithyroid_medication","sick","pregnant","thyroid_surgery",
-         "I131_treatment","query_hypothyroid","query_hyperthyroid","lithium","goitre","tumor","hypopituitary",
-         "psych","referral_source", "Class") 
+         "I131_treatment","query_hypothyroid","lithium","goitre","tumor","psych","referral_source")  
 nomi = union(nomi, paste0("MISS_",miss)) #Add missing indicators
 df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
 summary(df[nomi])
@@ -177,11 +187,16 @@ df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, oth
 nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange name
 summary(df[nomi], topn_toomany + 2)
 
+# Univariate variable importance
+varimp = filterVarImp(df[nomi], df$target, nonpara = TRUE) %>% 
+  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+names(varimp) = nomi
+varimp[order(varimp, decreasing = TRUE)]
+
+
 # Check
-plots = get_plot_distr_nomi_regr(df, nomi)
-#plots = get_plot_distr_nomi_regr(df, nomi) #for regression
-ggsave(paste0(plotloc, "distr_nomi_regr.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3, top = NULL), 
-       width = 18, height = 12)
+plots = get_plot_distr_nomi_class(df, nomi, varimpinfo = varimp)
+ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 
 
@@ -193,7 +208,7 @@ nomi = setdiff(nomi, "xxx")
 
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = 0)
-ggsave(paste0(plotloc, "corr_nomi_regr.pdf"), plot, width = 12, height = 12)
+ggsave(paste0(plotloc, "corr_nomi.pdf"), plot, width = 12, height = 12)
 nomi = setdiff(nomi, "MISS_FTI")
 
 
@@ -221,7 +236,7 @@ setdiff(predictors_binned, colnames(df))
 
 # Save image ----------------------------------------------------------------------------------------------------------
 
-save.image("1_explore_regr.rdata")
+save.image("1_explore.rdata")
 
 
 

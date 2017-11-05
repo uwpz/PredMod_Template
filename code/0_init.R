@@ -1,6 +1,5 @@
 
 #TODO: 
-# split class und regr
 # interactions by glmnet argument
 # absolute and relative residuals for performance plot regression
 # ylim optional in get_plot_partialdep
@@ -141,19 +140,22 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
   i.notna = which(!is.na(yhat))
   yhat = yhat[i.notna]
   y = y[i.notna]
+  absres = abs(yhat - y) #absolute residual
   
   spear = cor(yhat, y, method = "spearman")
   pear = cor(yhat, y, method = "pearson")
   AUC = concord(yhat, y)
-  MAE = mean(abs(yhat - y))
-  MdAE = median(abs(yhat - y))
-  sMAPE = mean(2 * abs(yhat - y)/(abs(yhat) + abs(y)))
-  sMdAPE = median(2 * abs(yhat - y)/(abs(yhat) + abs(y)))
-  MRAE = mean(abs(yhat - y)/abs(y - mean(y)))
-  MdRAE = median(abs(yhat - y)/abs(y - mean(y)))
+  MAE = mean(absres)
+  MdAE = median(absres)
+  MAPE = mean(absres / abs(y))
+  MdAPE = median(absres / abs(y))
+  sMAPE = mean(2 * absres / (abs(yhat) + abs(y)))
+  sMdAPE = median(2 * absres / (abs(yhat) + abs(y)))
+  MRAE = mean(absres / abs(y - mean(y)))
+  MdRAE = median(absres / abs(y - mean(y)))
   
-  out = c(spear, pear, AUC, MAE, MdAE, sMAPE, sMdAPE, MRAE, MdRAE)
-  names(out) = c("spearman","pearson","AUC","MAE", "MdAE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
+  out = c(spear, pear, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
+  names(out) = c("spearman","pearson","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
   out
 }
 
