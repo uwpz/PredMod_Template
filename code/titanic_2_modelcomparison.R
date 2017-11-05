@@ -111,7 +111,7 @@ plot(fit)
 fit = train(formula, data = df.train[c("target",predictors)],
             trControl = ctrl_index_fff, metric = metric, 
             method = "xgbTree", 
-            tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = c(3,6,9), 
+            tuneGrid = expand.grid(nrounds = seq(100,2100,200), max_depth = c(3,6,9), 
                                    eta = c(0.1,0.01), gamma = 0, colsample_bytree = c(0.5,0.7), 
                                    min_child_weight = c(5,10), subsample = c(0.5,0.7)))
 plot(fit)
@@ -382,8 +382,8 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
   fit = train(formula, data = df.train[i.train,c("target",predictors)],
               trControl = ctrl_none, metric = metric, 
               method = "xgbTree", 
-              tuneGrid = expand.grid(nrounds = 500, max_depth = 3, 
-                                     eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
+              tuneGrid = expand.grid(nrounds = 1000, max_depth = 3, 
+                                     eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
                                      min_child_weight = 5, subsample = 0.7))
   
   print(Sys.time() - tmp)

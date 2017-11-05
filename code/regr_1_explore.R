@@ -177,7 +177,7 @@ levinfo = map_int(df[nomi], ~ length(levels(.)))
 levinfo[order(levinfo, decreasing = TRUE)]
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
 (toomany = setdiff(toomany, c("xxx"))) #Set exception for important variables
-df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, other_level = "_OTHER_")) #collapse
+df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
 nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange name
 summary(df[nomi], topn_toomany + 2)
 

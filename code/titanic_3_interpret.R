@@ -55,9 +55,9 @@ tmp = Sys.time()
 fit = train( formula, data = df.train[c("target",predictors)], 
              trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
              method = "xgbTree",
-             tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                    eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                    min_child_weight = c(10), subsample = c(0.7)))
+             tuneGrid = expand.grid(nrounds = 1000, max_depth = 3, 
+                                    eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
+                                    min_child_weight = 5, subsample = 0.7))
 Sys.time() - tmp
 
 # Predict
@@ -78,7 +78,7 @@ y_test = df.test$target
 # Plot performance
 mysummary_class(data.frame(yhat = yhat_test, y = y_test))
 plots = get_plot_performance_class(yhat = yhat_test, y = y_test, reduce_factor = NULL)
-ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+ggsave(paste0(plotloc, "titanic_performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
 
@@ -92,13 +92,13 @@ df.test$abs_residual = abs(as.numeric(y_test) - 1 - yhat_test)
 summary(df.test$residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-1,1))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = c(-1,1)))
-ggsave(paste0(plotloc, "diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
+ggsave(paste0(plotloc, "titanic_diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 # Absolute residuals
 summary(df.test$abs_residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1))), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "abs_residual", ylim = c(0,1)))
-ggsave(paste0(plotloc, "diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
+ggsave(paste0(plotloc, "titanic_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
 
 
@@ -119,9 +119,9 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dop
   fit = train( formula, data = df.boot[c("target",predictors)], 
                trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
                method = "xgbTree",
-               tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                      eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                      min_child_weight = c(10), subsample = c(0.7)))
+               tuneGrid = expand.grid(nrounds = 1000, max_depth = 3, 
+                                      eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
+                                      min_child_weight = 5, subsample = 0.7))
   yhat = predict(fit, df.train[i.oob,predictors], type = "prob")[["Y"]]
   auc = as.numeric((mysummary_class(data.frame(yhat = yhat, y = df.train[i.oob, "target"][[1]])))["auc"])
   return(setNames(list(fit, auc), c(paste0("fit_",i), c(paste0("auc_",i)))))
@@ -149,9 +149,9 @@ formula_top = as.formula(paste("target", "~", paste(predictors_top, collapse = "
 fit_top = train(formula_top, data = df.train[c("target",predictors_top)], 
                 trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
                 method = "xgbTree",
-                tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                       eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                       min_child_weight = c(10), subsample = c(0.7)))
+                tuneGrid = expand.grid(nrounds = 1000, max_depth = 3, 
+                                       eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
+                                       min_child_weight = 5, subsample = 0.7))
 
 # Plot performance
 tmp = prob_samp2full(predict(fit_top, df.test[predictors_top], type = "prob")[["Y"]], b_sample, b_all)
@@ -205,7 +205,7 @@ for (i in 1:n.boot) {
 
 # Plot
 plot = get_plot_varimp(df.varimp, topn_vars, df.plot_boot = df.varimp_boot)
-ggsave(paste0(plotloc, "variable_importance.pdf"), plot, w = 8, h = 6)
+ggsave(paste0(plotloc, "titanic_variable_importance.pdf"), plot, w = 8, h = 6)
 
 
 
@@ -225,7 +225,7 @@ df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
 
 # Visual check whether all fits 
 plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,0.3))
-ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+ggsave(paste0(plotloc, "titanic_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -249,8 +249,8 @@ df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample, b_al
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,0.3))
-ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,1))
+ggsave(paste0(plotloc, "titanic_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -288,7 +288,7 @@ df.model_test$id = 1:nrow(df.model_test)
 
 ## Plot
 plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
-ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+ggsave(paste0(plotloc, "titanic_explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 

@@ -117,10 +117,6 @@ df[,metr] = map(df[metr], ~ {
 tolog = c("TSH")
 df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
 metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
-# for (varname in tolog) { 
-#   #adapt binned name (to keep metr and metr_BINNED in sync)
-#   colnames(df)[colnames(df) == paste0(varname,"_BINNED_")] = paste0(varname,"_LOG__BINNED_")
-# }
 names(misspct) = metr #adapt misspct names
 
 
@@ -183,7 +179,7 @@ levinfo = map_int(df[nomi], ~ length(levels(.)))
 levinfo[order(levinfo, decreasing = TRUE)]
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
 (toomany = setdiff(toomany, c("xxx"))) #Set exception for important variables
-df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, other_level = "_OTHER_")) #collapse
+df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
 nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange name
 summary(df[nomi], topn_toomany + 2)
 
