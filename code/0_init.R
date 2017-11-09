@@ -557,11 +557,12 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
   ## Prepare
   pred_obj = mysummary_regr(data.frame(y = y, yhat = yhat))
   spearman = round(pred_obj["spearman"], 2)
-  df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, 
+  df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, absres = abs(y - yhat), rel_absres = abs(y - yhat) / abs(y),
                        midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
   df.distr = data.frame(type = c(rep("y", length(y)), rep("yhat", length(y))),
                         value = c(y, yhat))
   df.calib = df.perf %>% group_by(midpoint) %>% summarise(y = mean(y), yhat = mean(yhat))
+  
   
   ## Performance plot
   p_perf = ggplot(data = df.perf, aes_string("yhat", "y")) +
@@ -575,61 +576,7 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
   if (length(ylim)) p_perf = p_perf + xlim(ylim) + ylim(ylim)
   
   
-  ## Residual plot
-  p_res = ggplot(data = df.perf, aes_string("yhat", "res")) +
-    geom_hex() + 
-    scale_fill_gradientn(colors = gradcol, name = "count") +
-    geom_smooth(color = "black", level = 0.95, size = 0.5) +
-    labs(title = "Residuals vs. Fitted", x = expression(hat(y)), y = expression(paste(hat(y) - y))) +
-    theme(plot.title = element_text(hjust = 0.5))
-  if (length(ylim)) p_res = p_res + xlim(ylim)
-  tmp = ggplot_build(p_res)
-  xrange = tmp$layout$panel_ranges[[1]]$x.range
-  yrange = tmp$layout$panel_ranges[[1]]$y.range
-  p.inner_x = ggplot(data = df.perf, aes_string(x = "yhat")) +
-    geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-    scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-    geom_density(color = "black") +
-    theme_void()
-  tmp = ggplot_build(p.inner_x)
-  p.inner_x_inner = ggplot(data = df.perf, aes_string(x = 1, y = "yhat")) +
-    geom_boxplot(color = "black") +
-    coord_flip() +
-    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-    theme_void()
-  p.inner_x = p.inner_x + 
-    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
-    theme_void() +
-    annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-                      ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
-  
-  p.inner_y = ggplot(data = df.perf, aes_string(x = "res")) +
-    geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-    scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-    geom_density(color = "black") +
-    coord_flip() +
-    theme_void()
-  tmp = ggplot_build(p.inner_y)
-  p.inner_y_inner = ggplot(data = df.perf, aes_string(x = 1, y = "res")) +
-    geom_boxplot(color = "black") +
-    #coord_flip() +
-    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-    theme_void()
-  p.inner_y = p.inner_y + 
-    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
-    theme_void() +
-    annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-                      ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
-  
-  p_res = p_res + 
-    scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-    scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-    theme(plot.title = element_text(hjust = 0.5)) +
-    annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
-    annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
-  
-  
-  # Distribution of predictions and target (plot similar to plot_distr_metr)
+  ## Distribution of predictions and target (plot similar to plot_distr_metr)
   p_distr = ggplot(data = df.distr, aes_string("value")) +
     geom_histogram(aes(y = ..density.., fill = type), bins = 40, position = "identity") +
     geom_density(aes(color = type)) +
@@ -650,7 +597,8 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
     theme_my +
     annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
   
-  # Calibration
+  
+  ## Calibration
   p_calib = ggplot(df.calib, aes(yhat, y)) +
     geom_line(color = "black") +
     geom_point(color = "black") +  
@@ -660,8 +608,73 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
     labs(title = "Calibration", x = "Prediction Average (in quantile bin)", y = "Observation Average") +
     theme_my 
   
+  
+  ## Two sided scatter: used for Residual plots
+  res_plot = function(df.plot = df.perf, x = "yhat", y = "res", title = "Residuals vs. Fitted", 
+                      xlab = expression(hat(y)), ylab = expression(paste(hat(y) - y))) {
+    
+    
+    p_res = ggplot(data = df.plot, aes_string(x, y)) +
+      geom_hex() + 
+      scale_fill_gradientn(colors = gradcol, name = "count") +
+      geom_smooth(color = "black", level = 0.95, size = 0.5) +
+      labs(title = title, x = xlab, y = ylab) +
+      theme(plot.title = element_text(hjust = 0.5))
+    if (length(ylim)) p_res = p_res + xlim(ylim)
+    tmp = ggplot_build(p_res)
+    xrange = tmp$layout$panel_ranges[[1]]$x.range
+    yrange = tmp$layout$panel_ranges[[1]]$y.range
+    p.inner_x = ggplot(data = df.plot, aes_string(x = x)) +
+      geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+      scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      geom_density(color = "black") +
+      theme_void()
+    tmp = ggplot_build(p.inner_x)
+    p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
+      geom_boxplot(color = "black") +
+      coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+      theme_void()
+    p.inner_x = p.inner_x + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
+      theme_void() +
+      annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                        ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
+    
+    p.inner_y = ggplot(data = df.plot, aes_string(x = y)) +
+      geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+      scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+      geom_density(color = "black") +
+      coord_flip() +
+      theme_void()
+    tmp = ggplot_build(p.inner_y)
+    p.inner_y_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
+      geom_boxplot(color = "black") +
+      #coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+      theme_void()
+    p.inner_y = p.inner_y + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
+      theme_void() +
+      annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                        ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
+    
+    p_res + 
+      scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
+      annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
+  }
+  
+  p_res = res_plot()
+  p_absres = res_plot(y = "absres", title = "Residuals (absolute) vs. Fitted", 
+                      ylab = expression(paste("|",hat(y) - y,"|")))
+  p_rel_absres = res_plot(y = "rel_absres", title = "Residuals (absolute) vs. Fitted", 
+                          ylab = expression(paste("|",hat(y) - y,"| / |y|")))
+  
   # Plot
-  plots = list(p_perf, p_res, p_calib, p_distr)
+  plots = list(p_perf, p_calib, p_distr, p_res, p_absres, p_rel_absres)
   plots
 }
 

@@ -64,7 +64,7 @@ y_test = df.test$target
 # Plot performance
 mysummary_regr(data.frame(yhat = yhat_test, y = y_test))
 plots = get_plot_performance_regr(yhat = yhat_test, y = y_test, quantiles = seq(0, 1, 0.05))
-ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 3, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
 
