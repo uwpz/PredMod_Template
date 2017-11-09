@@ -19,13 +19,24 @@ registerDoParallel(cl)
 
 
 
-# Sample data --------------------------------------------------------------------------------------------
+# Undersample data --------------------------------------------------------------------------------------------
 
 # Just take data from train fold
-df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
+summary(df[df$fold == "train", "target"])
+df.train = c()
+for (i in 1:2) {
+  i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
+  set.seed(i*123)
+  df.train = bind_rows(df.train, df[sample(i.samp, min(50000, length(i.samp))),]) #take all but 50000 at most
+}
+summary(df.train$target)
+
+# Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
+b_all = mean(df %>% filter(fold == "train") %>% .$target_num)
+b_sample = mean(df.train$target_num)
 
 # Set metric for peformance comparison
-metric = "spearman"
+metric = "auc"
 
 # Define test data
 df.test = df %>% filter(fold == "test")
@@ -38,16 +49,17 @@ df.test = df %>% filter(fold == "test")
 #######################################################################################################################-
 
 ## Validation information
-metric = "spearman"
+metric = "auc"
 
 # Possible controls
 set.seed(999)
 ctrl_cv = trainControl(method = "repeatedcv", number = 4, repeats = 1, returnResamp = "final",
-                       summaryFunction = mysummary_regr) #NOT USED
+                       summaryFunction = mysummary_class, classProbs = TRUE) #NOT USED
 l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
 ctrl_index_fff = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
-                              summaryFunction = mysummary_regr, 
+                              summaryFunction = mysummary_class, classProbs = TRUE, 
                               indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
+
 
 
 ## Fits
@@ -58,7 +70,7 @@ fit = train(formula_binned, data = df.train[c("target",predictors_binned)],
             tuneGrid = expand.grid(alpha = c(0,0.2,0.4,0.6,0.8,1), lambda = 2^(seq(-3, -10, -1))),
             #tuneLength = 20, 
             preProc = c("center","scale")) 
-plot(fit, ylim = c(0.49,0.51))
+plot(fit, ylim = c(0.94,0.96))
 # -> keep alpha=1 to have a full Lasso
 
 
@@ -132,11 +144,12 @@ fit = train(formula, data = as.data.frame(df.train[c("target",predictors)]),
             # tuneGrid = expand.grid(num_rounds = c(50,100,200), num_leaves = 10,  
             #                        learning_rate = .1, feature_fraction = .7,  
             #                        min_data_in_leaf = 5, bagging_fraction = .7),
-            tuneGrid = expand.grid(num_rounds = seq(100,1100,100), num_leaves = c(10,20),
-                                   learning_rate = c(0.1,0.01), feature_fraction = c(0.5,0.7),
-                                   min_data_in_leaf = c(5,10), bagging_fraction = c(0.5,0.7)),
-            max_depth = 3,
-            verbose = 0) 
+            tuneGrid = expand.grid(num_rounds = c(10,seq(1000,10000,1000)), num_leaves = c(10,40,100),
+                                   learning_rate = c(1,0.1,0.01), feature_fraction = c(0.7),
+                                   min_data_in_leaf = c(1,5,10), bagging_fraction = c(0.7)),
+            #max_depth = 3,
+            #verbose = 0
+            ) 
 plot(fit)
 # -> numLeaves = 20, learning_rate = 0.01, feature_fraction = example_fraction = 0.7, minSplit = 10
 
@@ -205,7 +218,7 @@ perfcomp = function(method, nsim = 5) {
     set.seed(999)
     l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
     ctrl_index = trainControl(method = "cv", number = 1, index = l.index, returnResamp = "final",
-                              summaryFunction = mysummary_regr)    
+                              summaryFunction = mysummary_class, classProbs = TRUE)
     
     
     ## Fit data
@@ -286,12 +299,12 @@ perfcomp = function(method, nsim = 5) {
     
     # Calculate holdout performance
     if (method %in% c("glmnet","glm")) {
-      yhat_holdout = predict(fit, df.holdout[predictors_binned]) 
+      yhat_holdout = predict(fit, df.holdout[predictors_binned], type = "prob")[[2]] 
     } else  {
-      yhat_holdout = predict(fit, df.holdout[predictors]) 
+      yhat_holdout = predict(fit, df.holdout[predictors], type = "prob")[[2]] 
     }
-    perf_holdout = mysummary_regr(data.frame(y = df.holdout$target, yhat = yhat_holdout))
-    
+    perf_holdout = mysummary_class(data.frame(y = df.holdout$target, yhat = yhat_holdout))
+
     # Put all together
     result = rbind(result, data.frame(sim = sim, method = method, t(perf_holdout)))
   }   
@@ -365,12 +378,12 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
   
   
   ## Fit on chunk
-  ctrl_none = trainControl(method = "none")
+  ctrl_none = trainControl(method = "none", classProbs = TRUE)
   tmp = Sys.time()
   fit = train(formula, data = df.train[i.train,c("target",predictors)],
               trControl = ctrl_none, metric = metric, 
               method = "xgbTree", 
-              tuneGrid = expand.grid(nrounds = 500, max_depth = 3, 
+              tuneGrid = expand.grid(nrounds = 1000, max_depth = 9, 
                                      eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
                                      min_child_weight = 5, subsample = 0.7))
   
@@ -378,28 +391,31 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
   
   
   
-  ## Score 
+  ## Score (needs rescale to prior probs)
   # Train data 
   y_train = df.train[i.train,]$target
-  yhat_train = predict(fit, df.train[i.train,predictors])
+  (b_sample = (summary(y_train) / length(y_train))[[2]]) #new b_sample
+  yhat_train = prob_samp2full(predict(fit, df.train[i.train,predictors], type = "prob")[[2]],
+                              b_sample, b_all)
   
   # Test data 
   y_test = df.test$target
   l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
-  yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %do% {
+  yhat_test = foreach(j = 1:length(l.split), .combine = c) %do% {
     # Scoring in chunks due to high memory consumption of xgboost
-    yhat = predict(fit, df.test[l.split[[i]],predictors])
+    yhat = predict(fit, df.test[l.split[[j]],predictors], type = "prob")[[2]]
     gc()
     yhat
   }
+  yhat_test = prob_samp2full(yhat_test, b_sample, b_all)
   
   # Bind together
   res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.train)),
-                    t(mysummary_regr(data.frame(y = y_train, yhat = yhat_train)))),
+                    t(mysummary_class(data.frame(y = y_train, yhat = yhat_train)))),
               cbind(data.frame("fold" = "test", "numtrainobs" = length(i.train)),
-                    t(mysummary_regr(data.frame(y = y_test, yhat = yhat_test)))))
-  
+                    t(mysummary_class(data.frame(y = y_test, yhat = yhat_test)))))
 
+  
   
   ## Garbage collection and output
   gc()

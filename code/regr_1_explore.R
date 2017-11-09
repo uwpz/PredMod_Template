@@ -227,7 +227,7 @@ setdiff(predictors_binned, colnames(df))
 
 
 # Save image ----------------------------------------------------------------------------------------------------------
-
+rm(df.orig)
 save.image("1_explore.rdata")
 
 

@@ -400,9 +400,9 @@ df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages =
   # Test data 
   y_test = df.test$target
   l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
-  yhat_test = foreach(i = 1:length(l.split), .combine = bind_rows) %do% {
+  yhat_test = foreach(j = 1:length(l.split), .combine = c) %do% {
     # Scoring in chunks due to high memory consumption of xgboost
-    yhat = predict(fit, df.test[l.split[[i]],predictors], type = "prob")[[2]]
+    yhat = predict(fit, df.test[l.split[[j]],predictors], type = "prob")[[2]]
     gc()
     yhat
   }

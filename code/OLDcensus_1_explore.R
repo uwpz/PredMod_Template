@@ -15,12 +15,21 @@ source("./code/0_init.R")
 
 # Read data --------------------------------------------------------------------------------------------------------
 
-df.orig = read_csv(paste0(dataloc,"thyroid.csv"), col_names = TRUE)
+df.orig = bind_rows(cbind(read_csv(paste0("./bigdata/","census-income.data"), col_names = FALSE), fold = "train"),
+                    cbind(read_csv(paste0("./bigdata/","census-income.test"), col_names = FALSE), fold = "test"))
+tmp = read_delim(paste0("./bigdata/","census_colnames.txt"), delim = "\t", col_names = FALSE) %>% .$X1
+names = c(setdiff(tmp, c("adjusted_gross_income","federal_income_tax_liability","total_person_earnings",
+                         "total_person_income","taxable_income_amount")),
+          c("year","income","fold"))
+colnames(df.orig) = names
+# do not use instance_weight
+
+
 skip = function() {
   # Check some stuff
   df.tmp = df.orig %>% mutate_if(is.character, as.factor) 
   summary(df.tmp)
-  table(df.tmp$Class) / nrow(df.tmp)
+  table(df.tmp$income) / nrow(df.tmp)
 }
 
 # "Save" original data
@@ -32,9 +41,8 @@ df = df.orig
 # Define target and train/test-fold ----------------------------------------------------------------------------------
 
 # Target
-df = mutate(df, target = factor(ifelse(Class == "negative", "N", "Y"), levels = c("N","Y")),
-            target_num = ifelse(target == "N", 0 ,1))
-summary(df[c("target","target_num")])
+df$target = df$income
+summary(df$target)
 
 # Train/Test fold: usually split by time
 df$fold = factor("train", levels = c("train", "test"))
@@ -51,7 +59,7 @@ summary(df$fold)
 
 # Define metric covariates -------------------------------------------------------------------------------------
 
-metr = c("age","TSH","TT4","T4U","FTI","T3") # NOT USED: "TBG" -> only missings
+metr = c("age","TSH","TT4","T4U","FTI") # NOT USED: "TBG" -> only missings
 summary(df[metr]) 
 
 
@@ -100,7 +108,7 @@ summary(df[metr])
 # Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
-plots = get_plot_distr_metr_class(df, metr, missinfo = NULL)
+plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, ylim = c(0,8))) 
 ggsave(paste0(plotloc, "distr_metr.pdf"), suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2)), 
        width = 18, height = 12)
 
@@ -125,13 +133,12 @@ names(misspct) = metr #adapt misspct names
 # Final variable information --------------------------------------------------------------------------------------------
 
 # Univariate variable importance
-varimp = filterVarImp(df[metr], df$target, nonpara = TRUE) %>% 
-  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+varimp = sqrt(filterVarImp(df[metr], df$target, nonpara = TRUE)) %>% .$Overall
 names(varimp) = metr
 varimp[order(varimp, decreasing = TRUE)]
 
 # Plot 
-plots = get_plot_distr_metr_class(df, metr, missinfo = misspct, varimpinfo = varimp)
+plots = suppressMessages(get_plot_distr_metr_regr(df, metr, missinfo = misspct, varimpinfo = varimp, ylim = c(0,8))) 
 ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), width = 18, height = 12)
 
 
@@ -140,12 +147,12 @@ ggsave(paste0(plotloc, "distr_metr_final.pdf"), marrangeGrob(plots, ncol = 4, nr
 # Removing variables -------------------------------------------------------------------------------------------
 
 # Remove Self predictors
-metr = setdiff(metr, "T3")
+metr = setdiff(metr, "xxx")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
 plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0.2)
-ggsave(paste0(plotloc, "corr_metr.pdf"), plot, width = 8, height = 8)
+ggsave(paste0(plotloc, "corr_metr.pdf"), plot, width = 12, height = 12)
 metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
 metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables to remove
 
@@ -159,7 +166,7 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 # Define nominal covariates -------------------------------------------------------------------------------------
 
 nomi = c("sex","on_thyroxine","query_on_thyroxine","on_antithyroid_medication","sick","pregnant","thyroid_surgery",
-         "I131_treatment","query_hypothyroid","lithium","goitre","tumor","psych","referral_source")  
+         "I131_treatment","query_hypothyroid","lithium","goitre","tumor","psych","referral_source","Class")  
 nomi = union(nomi, paste0("MISS_",miss)) #Add missing indicators
 df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
 summary(df[nomi])
@@ -179,19 +186,17 @@ levinfo = map_int(df[nomi], ~ length(levels(.)))
 levinfo[order(levinfo, decreasing = TRUE)]
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
 (toomany = setdiff(toomany, c("xxx"))) #Set exception for important variables
-df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
+df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, other_level = "_OTHER_")) #collapse
 nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Exchange name
 summary(df[nomi], topn_toomany + 2)
 
 # Univariate variable importance
-varimp = filterVarImp(df[nomi], df$target, nonpara = TRUE) %>% 
-  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+varimp = sqrt(filterVarImp(df[nomi], df$target, nonpara = TRUE)) %>% .$Overall
 names(varimp) = nomi
 varimp[order(varimp, decreasing = TRUE)]
 
-
 # Check
-plots = get_plot_distr_nomi_class(df, nomi, varimpinfo = varimp)
+plots = get_plot_distr_nomi_regr(df, nomi, varimpinfo = varimp) 
 ggsave(paste0(plotloc, "distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 
@@ -231,7 +236,7 @@ setdiff(predictors_binned, colnames(df))
 
 
 # Save image ----------------------------------------------------------------------------------------------------------
-rm(df.orig)
+
 save.image("1_explore.rdata")
 
 
