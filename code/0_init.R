@@ -630,7 +630,7 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
       geom_density(color = "black") +
       theme_void()
     tmp = ggplot_build(p.inner_x)
-    p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
+    p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = x)) +
       geom_boxplot(color = "black") +
       coord_flip() +
       scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
@@ -668,9 +668,9 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
   }
   
   p_res = res_plot()
-  p_absres = res_plot(y = "absres", title = "Residuals (absolute) vs. Fitted", 
+  p_absres = res_plot(y = "absres", title = "absolute Residuals vs. Fitted", 
                       ylab = expression(paste("|",hat(y) - y,"|")))
-  p_rel_absres = res_plot(y = "rel_absres", title = "Residuals (absolute) vs. Fitted", 
+  p_rel_absres = res_plot(y = "rel_absres", title = "rel. absolute Residuals vs. Fitted", 
                           ylab = expression(paste("|",hat(y) - y,"| / |y|")))
   
   # Plot
