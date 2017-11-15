@@ -350,7 +350,7 @@ skip = function() {
 
 #---- Loop over training chunks --------------------------------------------------------------------------------------
 
-chunks_pct = c(seq(10,10,1), seq(20,100,10))
+chunks_pct = c(seq(1,10,1), seq(20,100,10))
 
 df.obsneed = c()  
 df.obsneed = foreach(i = 1:length(chunks_pct), .combine = bind_rows, .packages = c("caret")) %do% #NO dopar for xgboost!

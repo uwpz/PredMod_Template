@@ -345,7 +345,7 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
 
 
 # Get plot list of correlations of variables
-get_plot_corr <- function(outpdf, df.plot = df, input_type = "metr" , vars = metr, cutoff = NULL,
+get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutoff = NULL,
                           missinfo = NULL, method = "spearman") {
 
   # Correlation matrix
@@ -381,7 +381,7 @@ get_plot_corr <- function(outpdf, df.plot = df, input_type = "metr" , vars = met
   
   # Clip matrix
   if (!is.null(cutoff)) {
-    tokeep = which(rowSums(ifelse(m.corr > cutoff, 1, 0)) > 1)
+    tokeep = which(rowSums(ifelse(m.corr > cutoff, 1, 0), na.rm = TRUE) > 1)
     m.corr = m.corr[tokeep, tokeep]
   }
 
@@ -1340,7 +1340,7 @@ lgbm$type = c("Regression","Classification")
 lgbm$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE, 
              text = "parameter,class,label
-             num_rounds,numeric,num_rounds
+             nrounds,numeric,nrounds
              num_leaves,numeric,num_leaves
              min_data_in_leaf,numeric,min_data_in_leaf
              learning_rate,numeric,learning_rate
@@ -1351,14 +1351,14 @@ lgbm$parameters =
 lgbm$grid = function(x, y, len = NULL, search = "grid") {
   #browser()
   if (search == "grid") {
-    out <- expand.grid(num_rounds = floor((1:len) * 50),
+    out <- expand.grid(nrounds = floor((1:len) * 50),
                        num_leaves = 2^seq(1, len),
                        min_data_in_leaf = 10,
                        learning_rate = .1,
                        feature_fraction = 0.7,
                        bagging_fraction = 0.7)
   } else {
-    out <- data.frame(num_rounds = floor(runif(len, min = 10, max = 5000)),
+    out <- data.frame(nrounds = floor(runif(len, min = 10, max = 5000)),
                       num_leaves = 2 ^ sample(1:6, replace = TRUE, size = len), 
                       min_data_in_leaf = 2 ^ sample(0:6, replace = TRUE, size = len),
                       learning_rate = runif(len, min = .001, max = .6),
@@ -1373,16 +1373,16 @@ lgbm$loop = function(grid) {
   #browser()
   loop <- ddply(grid, 
                 c("learning_rate", "num_leaves", "feature_fraction", "min_data_in_leaf", "bagging_fraction"), 
-                function(x) c(num_rounds = max(x$num_rounds)))
+                function(x) c(nrounds = max(x$nrounds)))
   submodels <- vector(mode = "list", length = nrow(loop))
-  for (i in seq(along = loop$num_rounds)) {
+  for (i in seq(along = loop$nrounds)) {
     index <- which(grid$learning_rate == loop$learning_rate[i] &
                    grid$num_leaves == loop$num_leaves[i] & 
                    grid$feature_fraction == loop$feature_fraction[i] & 
                    grid$min_data_in_leaf == loop$min_data_in_leaf[i] & 
                    grid$bagging_fraction == loop$bagging_fraction[i])
-    trees <- grid[index, "num_rounds"]
-    submodels[[i]] <- data.frame(num_rounds = trees[trees != loop$num_rounds[i]])
+    trees <- grid[index, "nrounds"]
+    submodels[[i]] <- data.frame(nrounds = trees[trees != loop$nrounds[i]])
   }
   list(loop = loop, submodels = submodels)
 }
@@ -1393,7 +1393,7 @@ lgbm$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
   if (is.factor(y)) y = as.numeric(y) - 1
   if (is.factor(y)) objective = "binary" else objective = "regression_l2"
   modArgs <- list(data = lgb.Dataset(as.matrix(x), label = y),
-                  num_rounds = param$num_rounds,
+                  nrounds = param$nrounds,
                   num_leaves = param$num_leaves,
                   min_data_in_leaf = param$min_data_in_leaf,
                   learning_rate = param$learning_rate,
@@ -1418,8 +1418,8 @@ lgbm$predict = function(modelFit, newdata, submodels = NULL) {
   if (!is.null(submodels)) {
     tmp <- vector(mode = "list", length = nrow(submodels) + 1)
     tmp[[1]] <- out
-    for (j in seq(along = submodels$num_rounds)) {
-      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$num_rounds[j])
+    for (j in seq(along = submodels$nrounds)) {
+      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$nrounds[j])
       if (modelFit$problemType == "Classification") {
         out = predict(modelFit$model, newdata)
       } else {
@@ -1446,8 +1446,8 @@ lgbm$prob = function(modelFit, newdata, submodels = NULL) {
   if (!is.null(submodels)) {
     tmp <- vector(mode = "list", length = nrow(submodels) + 1)
     tmp[[1]] <- out
-    for (j in seq(along = submodels$num_rounds)) {
-      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$num_rounds[j])
+    for (j in seq(along = submodels$nrounds)) {
+      tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$nrounds[j])
       if (length(modelFit$obsLevels) == 2) {
         tmp_pred <- cbind(tmp_pred, 1 - tmp_pred)
         colnames(tmp_pred) <- c("Y","N")
@@ -1463,9 +1463,11 @@ lgbm$prob = function(modelFit, newdata, submodels = NULL) {
 lgbm$levels = function(x) {c("N","Y")}
 
 lgbm$sort = function(x) {
-  x[order(x$num_rounds, x$num_leaves, x$learning_rate, x$feature_fraction, 
+  x[order(x$nrounds, x$num_leaves, x$learning_rate, x$feature_fraction, 
           x$bagging_fraction), ]
 }
+
+
 
 
 
