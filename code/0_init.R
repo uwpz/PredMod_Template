@@ -777,7 +777,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
   
   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret") %dopar% 
   {
-    #i=2
+    #i=1
     print(vars[i])
     
     # Initialize resutl set
@@ -917,27 +917,40 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 # Get plot list for xgboost explainer
 get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_test, 
                               id_name = "id", type = "class", ylim = c(0.01, 0.99), 
-                              threshold = 1e-3) {
+                              threshold = NULL, topn = NULL) {
   
   # Prepare
-  df.ggplot = df.plot %>% 
+  df.tmp1 = df.plot %>% 
     gather_(key_col = "variable", value_col = "beta", gather_cols = setdiff(colnames(df.plot), id_name)) %>%  #rotate
-    mutate(variable = ifelse(variable != "intercept" & abs(beta) < threshold, "..... the rest", variable),
-           flag_intercept = ifelse(variable == "intercept", 1, 0)) %>%  
+    mutate(flag_intercept = ifelse(variable == "intercept", 1, 0))
+  # Threshold summary of small effects
+  if (!is.null(threshold)) {
+    df.tmp2 = df.tmp1 %>% 
+      mutate(variable = ifelse(variable != "intercept" & abs(beta) < threshold, "..... the rest", variable))
+  }
+  # Topn summary of small effects
+  if (!is.null(topn)) {
+    df.tmp2 = df.tmp1 %>% group_by_(id_name) %>% arrange_(id_name, "desc(flag_intercept)", "desc(abs(beta))") %>% 
+      mutate(n = row_number()) %>% 
+      mutate(variable = ifelse(n > topn + 1, "..... the rest", variable)) %>% 
+      ungroup()
+  }
+  df.ggplot = df.tmp2 %>%  
     group_by_(id_name, "flag_intercept", "variable") %>% summarise(beta = sum(beta)) %>%  #summarise small effect
-    arrange_(id_name, "desc(flag_intercept)", "desc(abs(beta))") %>%  #sort descending inside id
+    mutate(flag_therest = ifelse(variable == "..... the rest", 1, 0)) %>% 
+    arrange_(id_name, "desc(flag_intercept)","flag_therest","desc(abs(beta))") %>%  #sort descending inside id
     left_join(gather_(df.values, key_col = "variable", value_col = "value", 
                       gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
-    mutate(variable = ifelse(variable %in% c("intercept","..... the rest"), 
-                             variable, paste0(variable," = ",round(value,2))))
+    mutate(variableandvalue = ifelse(variable %in% c("intercept","..... the rest"), 
+                             variable, paste0(variable," = ",value)))
   
-  plots = map(df.plot$id, ~ {
+  plots = map(df.plot[[id_name]], ~ {
     #.x = df.plot[1,"id"]
     print(.x)
     
     df.waterfall = df.ggplot %>% filter_(paste0(id_name, "==", .x))
     p = waterfall(values = df.waterfall$beta, rect_text_labels = round(df.waterfall$beta, 2), 
-                  labels = df.waterfall$variable, total_rect_text = round(sum(df.waterfall$beta), 2),
+                  labels = df.waterfall$variableandvalue, total_rect_text = round(sum(df.waterfall$beta), 2),
                   calc_total = TRUE, total_axis_text = "Prediction") + 
       labs(title = paste0(id_name, " = ", .x)) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),

@@ -27,7 +27,7 @@ df.train = c()
 for (i in 1:2) {
   i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
   set.seed(i*123)
-  df.train = bind_rows(df.train, df[sample(i.samp, min(100000, length(i.samp))),]) #take all but 100000 at most
+  df.train = bind_rows(df.train, df[sample(i.samp, min(10000, length(i.samp))),]) #take all but 100000 at most
 }
 summary(df.train$target)
 
@@ -39,7 +39,7 @@ b_sample = mean(df.train$target_num)
 metric = "auc"
 
 # Define test data
-df.test = df %>% filter(fold == "test")
+df.test = df %>% filter(fold == "test") %>% sample_n(1e4)
 
 
 
@@ -181,7 +181,7 @@ df.varimp = get_varimp_by_permutation(df.test, fit, vars = predictors, metric = 
 ggplot(df.varimp) + 
   geom_bar(aes(x = reorder(variable, importance), y = importance), stat = "identity") +
   coord_flip() 
-topn = 10
+topn = 20
 topn_vars = df.varimp[1:topn, "variable"]
 
 # Add other information (e.g. special coloring): color variable is needed -> fill with "dummy" if it should be ommited
@@ -216,15 +216,15 @@ ggsave(paste0(plotloc, "census_variable_importance.pdf"), plot, w = 8, h = 6)
 #######################################################################################################################-
 
 ## Partial depdendance for "total" fit 
-levs = map(df.test[nomi], ~ levels(.))
-quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
-df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
+levs = map(df.train[nomi], ~ levels(.))
+quantiles = map(df.train[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
+df.partialdep = get_partialdep(df.train, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
 
 # Rescale
 df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,0.3))
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.train, ylim = c(0,0.3))
 ggsave(paste0(plotloc, "census_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
@@ -263,11 +263,15 @@ ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, 
 
 ## Derive betas for all test cases
 
-# Get model matrix and DMatrix
+# Get model matrix and DMatrix, dito for test data
 m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
 m.train = xgb.DMatrix(m.model_train)
 m.model_test = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
 m.test = xgb.DMatrix(m.model_test)
+
+# Value data frame
+df.model_test = df.train 
+df.model_test$id = 1:nrow(df.model_test) #artificial id
 
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
@@ -280,15 +284,22 @@ df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
 df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
 df.predictions$id = 1:nrow(df.predictions)
 
-# Get value data frame
-df.model_test = as.data.frame(m.model_test)
-df.model_test$id = 1:nrow(df.model_test)
-
+# Aggregate predictions for all nominal variables
+#df.save = df.predictions
+df.predictions = as.data.frame(df.save)
+for (i in 1:length(fit$xlevels)) {
+  #i=1
+  varname = names(fit$xlevels)[i]
+  levnames = paste0(varname, fit$xlevels[[i]][-1])
+  df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
+  df.predictions[levnames] = NULL
+}
 
 
 ## Plot
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
-ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_explainer(df.plot = df.predictions[1:2,], df.values = df.model_test[1:2,], type = "class",
+                           topn = 20)
+ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 1, nrow = 1), 
        w = 18, h = 12)
 
 

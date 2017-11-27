@@ -111,7 +111,7 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret")) %dopar% {
                                      eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
                                      min_child_weight = c(10), subsample = c(0.7)))
   yhat = predict(fit, df.train[i.oob,predictors])
-  spearman = cor(yhat, df.train[i.oob, "target"][[1]], method = "spearman")
+  spearman = cor(yhat, df.train[i.oob,]$target, method = "spearman")
   return(setNames(list(fit, spearman), c(paste0("fit_",i), c(paste0("spearman_",i)))))
 }
 
@@ -247,8 +247,12 @@ ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, 
 # Get model matrix and DMatrix
 m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
 m.train = xgb.DMatrix(m.model_train)
-m.model_test = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
+m.model_test = model.matrix(formula, data = df.test[c("target",predictors)], contrasts = NULL)[,-1]
 m.test = xgb.DMatrix(m.model_test)
+
+# Get value data frame
+df.model_test = as.data.frame(m.model_test)
+df.model_test$id = 1:nrow(df.model_test)
 
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "regression")
@@ -257,9 +261,16 @@ df.explainer = buildExplainer(fit$finalModel, m.train, type = "regression")
 df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
 df.predictions$id = 1:nrow(df.predictions)
 
-# Get value data frame
-df.model_test = as.data.frame(m.model_test)
-df.model_test$id = 1:nrow(df.model_test)
+# Aggregate predictions for all nominal variables
+#df.save = df.predictions
+df.predictions = as.data.frame(df.save)
+for (i in 1:length(fit$xlevels)) {
+  #i=1
+  varname = names(fit$xlevels)[i]
+  levnames = paste0(varname, fit$xlevels[[i]][-1])
+  df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
+  df.predictions[levnames] = NULL
+}
 
 
 
