@@ -262,8 +262,7 @@ df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
 df.predictions$id = 1:nrow(df.predictions)
 
 # Aggregate predictions for all nominal variables
-#df.save = df.predictions
-df.predictions = as.data.frame(df.save)
+df.predictions = as.data.frame(df.predictions)
 for (i in 1:length(fit$xlevels)) {
   #i=1
   varname = names(fit$xlevels)[i]
@@ -275,7 +274,7 @@ for (i in 1:length(fit$xlevels)) {
 
 
 ## Plot
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "regr", 
+plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "regr", topn = 10,
                            ylim = c(1,3))
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)

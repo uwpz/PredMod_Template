@@ -271,7 +271,8 @@ m.test = xgb.DMatrix(m.model_test)
 
 # Value data frame
 df.model_test = as.data.frame(m.model_test)
-df.model_test$id = 1:nrow(df.model_test)	  
+df.model_test$id = 1:nrow(df.model_test)	 
+
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
 
@@ -285,8 +286,7 @@ df.predictions$id = 1:nrow(df.predictions)
 
 
 # Aggregate predictions for all nominal variables
-#df.save = df.predictions
-df.predictions = as.data.frame(df.save)
+df.predictions = as.data.frame(df.predictions)
 for (i in 1:length(fit$xlevels)) {
   #i=1
   varname = names(fit$xlevels)[i]
@@ -297,7 +297,7 @@ for (i in 1:length(fit$xlevels)) {
 
 
 ## Plot
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
+plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class", topn = 10)
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 

@@ -1,6 +1,0 @@
-a = read_csv("./bigdata/census-income.data", col_names = FALSE)
-summary(a$X25)
-a$blub = ifelse(a$X25>50000/14, "Y", "N")
-table(a$blub)
-table(as.factor(a$X42),a$blub)
-unique(a$X25)
