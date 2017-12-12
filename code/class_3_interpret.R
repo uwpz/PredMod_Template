@@ -263,15 +263,17 @@ ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, 
 
 ## Derive betas for all test cases
 
+# Value data frame
+i.top = order(yhat_test, decreasing = TRUE)[1:20]
+df.model_test = df.test[i.top,c("target",predictors)]
+df.model_test$id = 1:nrow(df.model_test)
+
 # Get model matrix and DMatrix
 m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
 m.train = xgb.DMatrix(m.model_train)
-m.model_test = model.matrix(formula, data = df.test[c("target",predictors)], contrasts = NULL)[,-1]
+m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)[,-1]
 m.test = xgb.DMatrix(m.model_test)
 
-# Value data frame
-df.model_test = as.data.frame(m.model_test)
-df.model_test$id = 1:nrow(df.model_test)	  
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
 
@@ -283,10 +285,8 @@ df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
 df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
 df.predictions$id = 1:nrow(df.predictions)
 
-
 # Aggregate predictions for all nominal variables
-#df.save = df.predictions
-df.predictions = as.data.frame(df.save)
+df.predictions = as.data.frame(df.predictions)
 for (i in 1:length(fit$xlevels)) {
   #i=1
   varname = names(fit$xlevels)[i]
@@ -296,11 +296,11 @@ for (i in 1:length(fit$xlevels)) {
 }
 
 
-## Plot
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class")
-ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
-       w = 18, h = 12)
 
+## Plot
+plots = get_plot_explainer(df.plot = df.predictions, df.values = df.model_test, type = "class", topn = 10)
+ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 1, nrow = 2), 
+       w = 18, h = 12)
 
 
 #save.image("3_interpret.rdata")
