@@ -275,8 +275,13 @@ for (i in 1:length(fit$xlevels)) {
 
 
 ## Plot
+<<<<<<< HEAD
 plots = get_plot_explainer(df.plot = df.predictions, df.values = df.model_test, type = "regr", topn = 10, 
                            ylim = c(0,8))
+=======
+plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "regr", topn = 10,
+                           ylim = c(1,3))
+>>>>>>> a19eb84eb93dd4db3c1a2ebc75b9ba7e9ae7a461
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 

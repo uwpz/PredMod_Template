@@ -274,6 +274,13 @@ m.train = xgb.DMatrix(m.model_train)
 m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)[,-1]
 m.test = xgb.DMatrix(m.model_test)
 
+<<<<<<< HEAD
+=======
+# Value data frame
+df.model_test = as.data.frame(m.model_test)
+df.model_test$id = 1:nrow(df.model_test)	 
+
+>>>>>>> a19eb84eb93dd4db3c1a2ebc75b9ba7e9ae7a461
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
 
@@ -298,8 +305,13 @@ for (i in 1:length(fit$xlevels)) {
 
 
 ## Plot
+<<<<<<< HEAD
 plots = get_plot_explainer(df.plot = df.predictions, df.values = df.model_test, type = "class", topn = 10)
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 1, nrow = 2), 
+=======
+plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class", topn = 10)
+ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+>>>>>>> a19eb84eb93dd4db3c1a2ebc75b9ba7e9ae7a461
        w = 18, h = 12)
 
 
