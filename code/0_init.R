@@ -29,6 +29,7 @@ library(vcd)
 library(grid)
 library(gridExtra)
 library(waterfalls)
+library(boot)
 
 # library(Hmisc)
 # library(d3heatmap)

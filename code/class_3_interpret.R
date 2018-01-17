@@ -264,7 +264,8 @@ ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, 
 ## Derive betas for all test cases
 
 # Value data frame
-i.top = order(yhat_test, decreasing = TRUE)[1:20]
+#i.top = order(yhat_test, decreasing = TRUE)[1:20]
+i.top = 1:20
 df.model_test = df.test[i.top,c("target",predictors)]
 df.model_test$id = 1:nrow(df.model_test)
 
@@ -274,13 +275,10 @@ m.train = xgb.DMatrix(m.model_train)
 m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)[,-1]
 m.test = xgb.DMatrix(m.model_test)
 
-<<<<<<< HEAD
-=======
 # Value data frame
 df.model_test = as.data.frame(m.model_test)
 df.model_test$id = 1:nrow(df.model_test)	 
 
->>>>>>> a19eb84eb93dd4db3c1a2ebc75b9ba7e9ae7a461
 # Create explainer data table from train data
 df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
 
@@ -290,6 +288,7 @@ df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
 
 # Get predictions for all test data
 df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
+df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
 df.predictions$id = 1:nrow(df.predictions)
 
 # Aggregate predictions for all nominal variables
@@ -305,13 +304,8 @@ for (i in 1:length(fit$xlevels)) {
 
 
 ## Plot
-<<<<<<< HEAD
 plots = get_plot_explainer(df.plot = df.predictions, df.values = df.model_test, type = "class", topn = 10)
 ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 1, nrow = 2), 
-=======
-plots = get_plot_explainer(df.plot = df.predictions[1:12,], df.values = df.model_test[1:12,], type = "class", topn = 10)
-ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
->>>>>>> a19eb84eb93dd4db3c1a2ebc75b9ba7e9ae7a461
        w = 18, h = 12)
 
 
