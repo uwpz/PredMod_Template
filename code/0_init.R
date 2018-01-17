@@ -161,6 +161,42 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
 }
 
 
+# Custom summary function for multiclass performance (use by caret)
+mysummary_multiclass = function (data, lev = NULL, model = NULL) 
+{
+  
+  if ("y" %in% colnames(data)) data$obs = data$y
+  if (!("pred" %in% colnames(data))) pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, function(x) which.max(x))], 
+                                                   levels = levels(data$obs))
+  #browser()
+  if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
+  
+  # Logloss stats
+  lloss <- mnLogLoss(data = data, lev = lev, model = model)
+  
+  # AUC stats
+  prob_stats <- lapply(levels(data[, "pred"]), function(x) {
+    obs <- ifelse(data[, "obs"] == x, 1, 0)
+    prob <- data[, x]
+    AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    AUCs = max(AUCs, 1-AUCs)
+    return(AUCs)
+  })
+  roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
+                 "Weighted_AUC" = mean(unlist(prob_stats) * table(data$obs)/nrow(data)))
+  
+  # confusion Matrix stats
+  CM <- confusionMatrix(data[, "pred"], data[, "obs"])
+  class_stats <- colMeans(CM$byClass)
+  names(class_stats) <- paste0("Mean_", names(class_stats))
+  
+  # Collect metrics
+  stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
+  names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+  return(stats)
+}
+
+
 # Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
                                      varimpinfo = NULL, nbins = 20, color = twocol, legend_only_in_1stplot = TRUE) {
@@ -545,6 +581,205 @@ get_plot_performance_class = function(yhat, y, reduce_factor = NULL, color = "bl
   
   
   ## Collect Plots and return
+  plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
+               p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
+  plots
+}
+
+
+# Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
+get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, color = "blue", colors = sevencol) {
+  
+  # Derive predicted class
+  pred = factor(colnames(yhat)[apply(yhat, 1, which.max)], levels = colnames(yhat))
+  
+  ## Prepare "direct" information (confusion, distribution, calibration)
+  conf_obj = confusionMatrix(pred, y)
+  df.confu = as.data.frame(conf_obj$table)
+  df.distr_all = c()
+  df.calib_all = c()
+  for (i in 1:length(levels(y))) {
+    #i=1
+    lev = levels(y)[i]
+    
+    # Prepare
+    df.distr = data.frame(target = factor(lev, levels = levels(y)), 
+                          y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
+    
+    df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), cuts = 5)$data
+    df.calib$target = factor(lev, levels = levels(y))
+    
+    # Collect
+    df.distr_all = bind_rows(df.distr_all, df.distr)
+    df.calib_all = bind_rows(df.calib_all, df.calib)
+  }
+  
+  
+  
+  ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
+  df.roc_all = c()
+  df.precrec_all = c()
+  df.gainlift_all = c()
+  df.auc_all = c()
+  for (i in 1:length(levels(y))) {
+    #i=1
+    lev = levels(y)[i]
+    
+    # Subset on level
+    df.tmp = data.frame(target = factor(lev, levels = levels(y)), 
+                        y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
+    
+    # Create performance objects
+    pred_obj = prediction(df.tmp$yhat, df.tmp$y)
+    df.auc = data.frame(target = factor(lev, levels = levels(y)),
+                        auc = performance(pred_obj, "auc" )@y.values[[1]])
+    tprfpr = performance( pred_obj, "tpr", "fpr")
+    precrec = performance( pred_obj, "ppv", "rec")
+    tmp = ifelse(df.tmp$y == "Y", 1, 0)[order(df.tmp$yhat, decreasing = TRUE)] 
+    df.gainlift = data.frame(target = factor(lev, levels = levels(y)),
+                             "x" = 100*(1:length(df.tmp$yhat))/length(df.tmp$yhat),
+                             "gain" = 100*cumsum(tmp)/sum(tmp))
+    df.gainlift$lift = df.gainlift$gain/df.gainlift$x 
+    
+    # Thin out reducable objects (for big test data as this reduces plot size)
+    if (!is.null(reduce_factor)) {
+      set.seed(123)
+      i.reduce = sample(1:nrow(df.tmp), floor(reduce_factor * nrow(df.tmp)))
+      i.reduce = i.reduce[order(i.reduce)]
+      for (type in c("x.values","y.values","alpha.values")) {
+        slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
+        slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
+      }
+      df.gainlift = df.gainlift[i.reduce,]
+    } 
+    
+    # Collect information of reduced information into data frames
+    df.roc = data.frame(target = factor(lev, levels = levels(y)),
+                        "fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]],
+                        "fpr_alpha" = NA, "tpr_alpha" = NA)
+    i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .)))
+    df.roc[i.alpha,"fpr_alpha"] = df.roc[i.alpha,"fpr"]
+    df.roc[i.alpha,"tpr_alpha"] = df.roc[i.alpha,"tpr"]
+    
+    df.precrec = data.frame(target = factor(lev, levels = levels(y)),
+                            "rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
+                            x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
+    df.precrec[is.nan(df.precrec$prec),"prec"] = 1
+    df.precrec[i.alpha,"rec_alpha"] = df.precrec[i.alpha,"rec"]
+    df.precrec[i.alpha,"prec_alpha"] = df.precrec[i.alpha,"prec"]
+    df.precrec[i.alpha,"x_alpha"] = df.precrec[i.alpha,"x"]
+    
+    # Collect
+    df.roc_all = bind_rows(df.roc_all, df.roc)
+    df.auc_all = bind_rows(df.auc_all, df.auc)
+    df.precrec_all = bind_rows(df.precrec_all, df.precrec)
+    df.gainlift_all = bind_rows(df.gainlift_all, df.gainlift)
+  }
+  
+  df.tmp = data.frame(100 * table(y)/length(y))
+  colnames(df.tmp) = c("target", "x")
+  df.tmp$y = 100
+  df.gainlift_help = bind_rows(df.tmp, data.frame(target = df.tmp$target, x = 0, y = 0),
+                               data.frame(target = df.tmp$target, x = 100, y = 100)) %>% arrange(x)
+  
+  
+  ## Plots
+  # ROC
+  p_roc = ggplot(df.roc_all, aes(x = fpr, y = tpr)) +
+    geom_line(aes(color = target), size = .5) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    geom_point(aes(x = fpr_alpha, y = tpr_alpha, color = target), 
+               data = df.roc_all[!is.na(df.roc_all$fpr_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, 
+                       labels = paste0(levels(df.roc_all$target)," (",round(df.auc_all$auc,3),")"), name = "Target (AUC)") +
+    scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
+    scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
+    labs(title = paste0("ROC (mean(AUC)=", round(mean(df.auc_all$auc),3), ")"), x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
+         y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
+    #geom_label(data = data.frame(x = 0.9, y = 0.1, text = paste0("AUC: ",round(auc,3))), aes(x = x, y = y, label = text)) +
+    #geom_label(aes(x, y, label = text), data.frame(x=0.7, y=0.3, text = lev), size = 7) +
+    theme_my +
+    theme(legend.position = c(0.75,0.5), legend.background = element_rect(color = "black"))
+  
+  # Condusion Matrix
+  p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
+    geom_tile(aes(fill = Freq)) + 
+    geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low = "white", high = "blue") +
+    scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
+    labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
+    theme_my 
+  
+  # Stratified distribution of predictions (plot similar to plot_distr_metr)
+  p_distr = ggplot(data = df.distr_all, aes_string("yhat")) +
+    geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
+    geom_density(aes(color = y)) +
+    scale_fill_manual(values = alpha(c("blue","red"), .2), name = "Target (y)") + 
+    scale_color_manual(values = c("blue","red"), name = "Target (y)") +
+    labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
+    guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
+    facet_wrap("target", scales = "free_y")
+  
+  # Gain + Lift
+  p_gain = ggplot(df.gainlift_all) +
+    # geom_polygon(aes(x, y, color = target), data.frame(x = c(0,100,100*sum(tmp)/length(tmp)), y = c(0,100,100)), 
+    #              fill = "grey90", alpha = 0.5) +
+    geom_line(aes(x, gain, color = target), size = .5) +
+    geom_line(aes(x, y, color = target), df.gainlift_help, size = .5, linetype = 2) +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
+    theme_my +
+    theme(legend.position = "none")
+  p_lift = ggplot(df.gainlift_all) +
+    geom_line(aes(x, lift, color = target), size = .5) +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
+    theme_my +
+    theme(legend.position = "none") +
+    facet_wrap("target", scales = "free_y")
+  
+  # Calibrate
+  p_calib = ggplot(df.calib_all, aes(midpoint, Percent)) +
+    geom_line(aes(color = target)) +
+    geom_point(aes(color = target)) +  
+    scale_color_manual(values = colors, name = "Target (y)") +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    scale_x_continuous(limits = c(0,100), breaks = seq(10,90,20)) + 
+    scale_y_continuous(limits = c(0,100), breaks = seq(0,100,10)) +
+    labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
+    theme_my +
+    theme(legend.position = "none")
+  
+  # Precision Recall
+  p_precrec = ggplot(df.precrec_all, aes(rec, prec)) +
+    geom_line(aes(color = target), size = .5) +
+    #geom_point(aes(color = target), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    geom_point(aes(x = rec_alpha, y = prec_alpha, color = target), 
+               data = df.precrec_all[!is.na(df.precrec_all$rec_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(breaks = seq(0,1,0.1)) +
+    labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my +
+    theme(legend.position = "none")
+  
+  # Precision
+  p_prec = ggplot(df.precrec_all, aes(x, prec)) +
+    geom_line(aes(color = target), size = .5) +
+    #geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    geom_point(aes(x = x_alpha, y = prec_alpha, color = target), 
+               data = df.precrec_all[!is.na(df.precrec_all$x_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(breaks = seq(0,100,10)) +
+    labs(title = "Precision", x = "% Samples Tested",
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my +
+    theme(legend.position = "none")
+  
+  
+  # Plot
   plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
                p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
   plots
