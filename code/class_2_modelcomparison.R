@@ -179,7 +179,7 @@ skip = function() {
   # Plot tuning result with ggplot
   fit$results %>% 
     ggplot(aes_string(x = x, y = y, colour = color)) +
-    geom_line(aes_string(linetype = linetype, dummy = shape)) +
+    geom_line(aes_string(linetype = linetype)) +
     geom_point(aes_string(shape = shape)) +
     #geom_errorbar(mapping = aes_string(ymin = "auc - aucSD", ymax = "auc + aucSD", linetype = linetype, width = 100)) +
     facet_grid(as.formula(paste0("~",facet)), labeller = label_both) 
