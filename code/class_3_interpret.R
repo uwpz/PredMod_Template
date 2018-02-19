@@ -270,13 +270,13 @@ df.model_test = df.test[i.top,c("target",predictors)]
 df.model_test$id = 1:nrow(df.model_test)
 
 # Get model matrix and DMatrix
-m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)[,-1]
-m.train = xgb.DMatrix(m.model_train)
-m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)[,-1]
-m.test = xgb.DMatrix(m.model_test)
+m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)
+m.train = xgb.DMatrix(m.model_train[,-1])
+m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)
+m.test = xgb.DMatrix(m.model_test[,-1])
 
 # Value data frame
-df.model_test = as.data.frame(m.model_test)
+df.model_test = as.data.frame(m.model_test[,-1])
 df.model_test$id = 1:nrow(df.model_test)	 
 
 # Create explainer data table from train data
@@ -293,10 +293,13 @@ df.predictions$id = 1:nrow(df.predictions)
 
 # Aggregate predictions for all nominal variables
 df.predictions = as.data.frame(df.predictions)
+df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
+                    levname = colnames(m.model_train)[-1])
 for (i in 1:length(fit$xlevels)) {
   #i=1
   varname = names(fit$xlevels)[i]
-  levnames = paste0(varname, fit$xlevels[[i]][-1])
+  #levnames = paste0(varname, fit$xlevels[[i]][-1])
+  levnames = as.character(df.map[df.map$varname == varname,]$levname)
   df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
   df.predictions[levnames] = NULL
 }
