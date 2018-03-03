@@ -123,18 +123,18 @@ ggsave(paste0(plotloc, "census_distr_metr.pdf"), suppressMessages(marrangeGrob(p
 
 # Winsorize
 df[,metr] = map(df[metr], ~ {
-  q_lower = quantile(., 0.01, na.rm = TRUE)
-  q_upper = quantile(., 0.99, na.rm = TRUE)
+  q_lower = quantile(., 0.001, na.rm = TRUE)
+  q_upper = quantile(., 0.999, na.rm = TRUE)
   .[. < q_lower] = q_lower
   .[. > q_upper] = q_upper
   . }
 )
 
-# Log-Transform
-# tolog = c("wage_per_hour","capital_gains","capital_losses","capital_losses")
-# df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
-# metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
-# names(misspct) = metr #adapt misspct names
+Log-Transform
+tolog = c("wage_per_hour","capital_gains","capital_losses","divdends_from_stocks")
+df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
+metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
+names(misspct) = metr #adapt misspct names
 
 
 
@@ -161,12 +161,27 @@ metr = setdiff(metr, "xxx")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
-plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0)
+plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = 0.2)
 ggsave(paste0(plotloc, "census_corr_metr.pdf"), plot, width = 8, height = 8)
 metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
 metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables to remove
 
 
+
+
+# Time/fold depedency --------------------------------------------------------------------------------------------
+
+# Univariate variable importance
+df$fold_test = factor(ifelse(df$fold == "test", "Y", "N"))
+varimp = filterVarImp(df[metr], df$fold_test, nonpara = TRUE) %>% 
+  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+names(varimp) = metr
+varimp[order(varimp, decreasing = TRUE)]
+
+# Plot 
+plots = get_plot_distr_metr_class(df, metr, target_name = "fold_test", missinfo = misspct, varimpinfo = varimp)
+ggsave(paste0(plotloc, "census_distr_metr_final_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+       width = 18, height = 12)
 
 
 #######################################################################################################################-
@@ -234,6 +249,23 @@ nomi = setdiff(nomi, "xxx")
 
 
 
+# Time/fold depedency --------------------------------------------------------------------------------------------
+
+# Univariate variable importance
+varimp = filterVarImp(df[nomi], df$fold_test, nonpara = TRUE) %>% 
+  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+names(varimp) = nomi
+varimp[order(varimp, decreasing = TRUE)]
+
+
+# Check
+plots = get_plot_distr_nomi_class(df, nomi, target_name = "fold_test", varimpinfo = varimp)
+ggsave(paste0(plotloc, "census_distr_nomi_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
+       width = 18, height = 12)
+
+
+
+
 #######################################################################################################################-
 #|||| Prepare final data ||||----
 #######################################################################################################################-
@@ -242,8 +274,10 @@ nomi = setdiff(nomi, "xxx")
 
 predictors = c(metr, nomi)
 formula = as.formula(paste("target", "~", paste(predictors, collapse = " + ")))
+formula_rightside = as.formula(paste("~", paste(predictors, collapse = " + ")))
 predictors_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
 formula_binned = as.formula(paste("target", "~", paste(predictors_binned, collapse = " + ")))
+formula_binned_rightside = as.formula(paste("~", paste(predictors_binned, collapse = " + ")))
 
 # Check
 summary(df[predictors])
@@ -253,10 +287,10 @@ setdiff(predictors_binned, colnames(df))
 
 
 
-
 # Save image ----------------------------------------------------------------------------------------------------------
+rm(plots)
 rm(df.orig)
-save.image("1_explore.rdata")
+save.image("census_1_explore.rdata")
 
 
 

@@ -1,7 +1,6 @@
 
 #TODO: 
-# interactions by glmnet argument
-# absolute and relative residuals for performance plot regression
+# interactions univariate
 # ylim optional in get_plot_partialdep
 
 
@@ -13,8 +12,10 @@ skip = function() {
   install.packages(c("tidyverse"))
 }
 
+library(Matrix)
 library(plyr) #always load plyr before dplyr
 library(tidyverse) #ggplot2,tibble,tidyr,readr,purrr,dplyr
+library(seplyr)
 library(forcats)
 library(stringr)
 library(lubridate)
@@ -38,8 +39,11 @@ library(boot)
 # 
 library(caret)
 library(xgboost)
-# library(glmnet)
+library(glmnet)
+library(ranger)
 library(ROCR)
+
+library(MicrosoftML)
 
 #library(devtools); install_github("AppliedDataSciencePartners/xgboostExplainer")
 library(xgboostExplainer)
@@ -70,6 +74,8 @@ manycol = c('#00FF00','#0000FF','#FF0000','#01FFFE','#FFA6FE','#FFDB66','#006401
             '#0E4CA1','#91D0CB','#BE9970','#968AE8','#BB8800','#43002C','#DEFF74','#00FFC6','#FFE502','#620E00',
             '#008F9C','#98FF52','#7544B1','#B500FF','#00FF78','#FF6E41','#005F39','#6B6882','#5FAD4E','#A75740',
             '#A5FFD2','#FFB167','#009BFF','#E85EBE')
+#barplot(1:length(manycol), col = manycol)
+fourcol = manycol[1:4]
 
 # Themes
 theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
@@ -111,8 +117,12 @@ mysummary_class = function(data, lev = NULL, model = NULL)
   accuracy = as.numeric(conf_obj$overall["Accuracy"])
   missclassification = 1 - accuracy
   
-  pred_obj = ROCR::prediction(yhat, y)
-  auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
+  if (is.numeric(yhat)) { #Fix for change in caret and parallel processing
+    pred_obj = ROCR::prediction(yhat, y)
+    auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
+  } else {
+    auc = 0
+  }
   
   out = c("auc" = auc, "accuracy" = accuracy, "missclassification" = missclassification)
   out
@@ -132,7 +142,7 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
     pred2 = pred[i.samp2]
     sum((obs1 > obs2) * (pred1 > pred2) + (obs1 < obs2) * (pred1 < pred2) + 0.5*(obs1 == obs2)) / sum(obs1 != obs2)
   }
- 
+  
   # Get y and yhat ("else" is default caret behavior)
   if ("y" %in% colnames(data)) y = data$y else y = data$obs 
   if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data$pred
@@ -141,10 +151,12 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
   i.notna = which(!is.na(yhat))
   yhat = yhat[i.notna]
   y = y[i.notna]
-  absres = abs(yhat - y) #absolute residual
+  res = yhat - y
+  absres = abs(res) #absolute residual
   
   spear = cor(yhat, y, method = "spearman")
   pear = cor(yhat, y, method = "pearson")
+  IqrE = IQR(res)
   AUC = concord(yhat, y)
   MAE = mean(absres)
   MdAE = median(absres)
@@ -155,10 +167,12 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
   MRAE = mean(absres / abs(y - mean(y)))
   MdRAE = median(absres / abs(y - mean(y)))
   
-  out = c(spear, pear, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
-  names(out) = c("spearman","pearson","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
+  out = c(spear, pear, IqrE, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
+  names(out) = c("spearman","pearson","IqrE","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
   out
 }
+
+
 
 
 # Custom summary function for multiclass performance (use by caret)
@@ -199,7 +213,8 @@ mysummary_multiclass = function (data, lev = NULL, model = NULL)
 
 # Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
-                                     varimpinfo = NULL, nbins = 20, color = twocol, legend_only_in_1stplot = TRUE) {
+                                     varimpinfo = NULL, nbins = 20, color = twocol, 
+                                     offset = 14, legend_only_in_1stplot = TRUE) {
   # Get levels of target
   levs_target = levels(df.plot[[target_name]])
   
@@ -213,7 +228,8 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
     
     # Start histogram plot
     p = ggplot(data = df.plot, aes_string(x = .x)) +
-      geom_histogram(aes_string(y = "..density..", fill = target_name), bins = nbins, position = "identity") +
+      geom_histogram(aes_string(y = "..density..", fill = target_name, color = target_name), 
+                     bins = nbins, position = "identity") +
       geom_density(aes_string(color = target_name)) +
       scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
       scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
@@ -227,6 +243,7 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
     # Inner boxplot
     p.inner = ggplot(data = df.plot, aes_string(target_name, y = .x)) +
       geom_boxplot(aes_string(color = target_name)) +
+      stat_summary(aes_string(color = target_name), fun.y = mean, geom = "point", shape = 4) +
       coord_flip() +
       scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
       scale_color_manual(values = color, name = target_name) +
@@ -235,7 +252,7 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
     
     # Put all together
     p = p + 
-      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/14, NA)) +
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/offset, NA)) +
       theme_my +
       annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
     if (legend_only_in_1stplot == TRUE) {
@@ -305,7 +322,8 @@ get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "ta
 
 # Get plot list of nomial variables vs classification target 
 get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL, 
-                                     color = twocol) {
+                                     color = twocol, min_width = 0, inner_barplot = FALSE, decimals = 1,
+                                     legend_only_in_1stplot = TRUE) {
   # Get levels of target
   levs_target = levels(df.plot[[target_name]])
   
@@ -313,26 +331,78 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
   plots = map(vars, ~ {
     #.x = vars[1]
     print(.x)
-    
-    # Proportion of Target=Y (height of bars) and relative frequency of levels (width of bars)
-    df.plot$target_num = ifelse(df.plot[[target_name]] == levs_target[2], 1, 0)
-    df.ggplot = df.plot %>% 
-      group_by_(.x) %>% 
-      summarise(n = n(), prob = mean(target_num)) %>%
-      ungroup() %>% 
-      mutate(perc = n/sum(n), width = n/max(n))
 
+    # Check for multiclass
+    if (length(levels(df.plot[[target_name]])) > 2) multiclass = TRUE else multiclass = FALSE
+    
+    # Proportion nominal variable
+    df.hlp1 = df.plot %>% 
+      group_by_(.x) %>% 
+      summarise(perc = n()/nrow(df.plot))
+    
+    # Proportion target (for reference lines)
+    refs = df.plot %>% 
+      group_by_(target_name) %>% 
+      summarise(ref = n()) %>% 
+      mutate(ref = cumsum(ref)/sum(ref)) %>% 
+      .$ref
+    if (multiclass) refs = refs[-length(refs)] else refs = refs[2] - refs[1]
+    
+    # Prepare data for plotting
+    df.ggplot = suppressMessages(
+      df.plot %>% 
+      group_by_(.x, target_name) %>% 
+      summarise(prop = n()) %>% 
+      group_by_(.x) %>% 
+      mutate(prop = prop/sum(prop)) %>% 
+      left_join(df.hlp1) %>% 
+      mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
+                               target_name)) %>%  
+      mutate(width = perc/max(.$perc)) %>%  
+      mutate(width = ifelse(width < min_width, min_width, width))
+    )
+
+    # Just take "Y"-class in non-multiclass case
+    if (!multiclass) df.ggplot = df.ggplot %>% filter_(paste0(target_name," == 'Y'")) 
+    
+    # Adpat color
+    if (multiclass) color = rev(color) else color = color[2]
+    
     # Plot
-    p = ggplot(df.ggplot, aes_string(x = .x, y = "prob")) +
-      geom_bar(stat = "identity", width = df.ggplot$width, color = twocol[2], fill = alpha(twocol[2], 0.2)) +
-      scale_x_discrete(labels = paste0(df.ggplot[[.x]], " (", round(100 * df.ggplot[["perc"]],1), "%)")) + 
+    p = ggplot(df.ggplot, aes_string(x = .x, y = "prop", fill = target_name))
+    if (multiclass) {
+      p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
+    } else{
+      p = p +geom_bar(stat = "identity", width = df.ggplot$width, color = "black") 
+    } 
+    p = p +
+      scale_fill_manual(values = alpha(color, 0.2)) +
+      scale_x_discrete(labels = paste0(df.hlp1[[.x]], " (", round(100 * df.hlp1[["perc"]], decimals), "%)")) + 
+      geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
       labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", varimp[.x], ")")), 
            x = "", 
-           y = paste0("Proportion ",target_name," = ",levs_target[2])) +
-      geom_hline(yintercept = sum(df.plot[[target_name]] == levs_target[2]) / nrow(df.plot), 
-                 linetype = 2, color = "darkgrey") +
+           y = paste0("Proportion Target")) +
       coord_flip() +
       theme_my 
+    
+    if (inner_barplot) {   
+      # Inner Barplot
+      p.inner = ggplot(data = df.hlp1, aes_string(x = .x, y = "perc")) +
+        geom_bar(stat= "identity", fill = "grey", colour = "black", width = 0.9) +
+        coord_flip() +
+        #scale_x_discrete(limits = rev(df.tmp2[[.]]), labels = rev(df.tmp2$label)) +
+        theme_void()
+      
+      # Put all together
+      p = p + 
+        scale_y_continuous(limits = c(-0.2,NA)) +
+        theme_my +
+        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) +
+        geom_hline(yintercept = 0, size = 0.5, colour = "black", linetype = 1)
+    }
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
+    }
     p
   })
   plots
@@ -341,8 +411,11 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
 
 # Get plot list of nomial variables vs regression target 
 get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL,  
-                                    ylim = NULL) {
+                                    ylim = NULL, decimals = 1) {
 
+  # Drop unused levels
+  df.plot = droplevels(df.plot)
+  
   # Loop over vars
   plots = map(vars, ~ {
     #.x = vars[1]
@@ -355,7 +428,7 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
       stat_summary(aes(group = 1), fun.y = mean, geom = "line", color = "darkgrey", linetype = 2) +
       coord_flip() +
       scale_x_discrete(labels = paste0(levels(df.plot[[.x]]), " (", 
-                                       round(100 * table(df.plot[[.x]])/nrow(df.plot), 1), "%)")) +
+                                       round(100 * table(df.plot[[.x]])/nrow(df.plot), decimals), "%)")) +
       labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")), x = "") +
       theme_my +
       theme(legend.position = "none") 
@@ -382,7 +455,7 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
 
 
 # Get plot list of correlations of variables
-get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutoff = NULL,
+get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutoff = 0, textcol = "white",
                           missinfo = NULL, method = "spearman") {
 
   # Correlation matrix
@@ -417,7 +490,7 @@ get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutof
   }
   
   # Clip matrix
-  if (!is.null(cutoff)) {
+  if (cutoff != 0) {
     tokeep = which(rowSums(ifelse(m.corr > cutoff, 1, 0), na.rm = TRUE) > 1)
     m.corr = m.corr[tokeep, tokeep]
   }
@@ -436,27 +509,33 @@ get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutof
   # Output as ggplot
   df.ggplot = as.data.frame(m.corr) %>% 
     mutate(rowvar = rownames(m.corr)) %>% 
-    gather(key = colvar, value = corr, -rowvar) 
+    gather(key = colvar, value = corr, -rowvar) %>% 
+    mutate(textcol = as.factor(ifelse(corr > cutoff, 2, 1)))
   p = ggplot(df.ggplot, aes(x = rowvar, y = colvar)) +
     geom_tile(aes(fill = corr)) + 
-    geom_text(aes(label = round(corr, 2))) +
+    geom_text(aes(label = round(corr, 2), colour = textcol)) +
     scale_fill_gradient(low = "white", high = "blue") +
     scale_x_discrete(limits = rev(rownames(m.corr))) +
     scale_y_discrete(limits = rownames(m.corr)) +
-    labs(title = if (input_type == "metr") paste0(method," Correlation") else "Contig.Coef", fill = "", x = "", y = "") +
+    scale_color_manual(values = c("black", textcol)) +
+    guides(color = FALSE) +
+    labs(title = paste0(if (input_type == "metr") paste0(method," Correlation") else "Contig.Coef",
+                        " (cutoff = ", cutoff, ")"), 
+         fill = "", x = "", y = "") +
     theme_my + theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
   p
 }
 
 
 # Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-get_plot_performance_class = function(yhat, y, reduce_factor = NULL, color = "blue", colors = twocol) {
+get_plot_performance_class = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
+                                      color = "blue", colors = twocol) {
   
   ## Prepare "direct" information (confusion, distribution, calibration)
   conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
   df.confu = as.data.frame(conf_obj$table)
   df.distr = data.frame(y = y, yhat = yhat)
-  df.calib = calibration(y~yhat, data.frame(y = y, yhat = 1 - yhat), cuts = 5)$data
+  df.calib = calibration(y~yhat, data.frame(y = y, yhat = 1 - yhat), cuts = quantile(yhat, quantiles))$data
 
   
   
@@ -588,7 +667,8 @@ get_plot_performance_class = function(yhat, y, reduce_factor = NULL, color = "bl
 
 
 # Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, color = "blue", colors = sevencol) {
+get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
+                                           color = "blue", colors = sevencol) {
   
   # Derive predicted class
   pred = factor(colnames(yhat)[apply(yhat, 1, which.max)], levels = colnames(yhat))
@@ -606,7 +686,8 @@ get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, color 
     df.distr = data.frame(target = factor(lev, levels = levels(y)), 
                           y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
     
-    df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), cuts = 5)$data
+    df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), 
+                           cuts = quantile(df.distr$yhat, quantiles))$data
     df.calib$target = factor(lev, levels = levels(y))
     
     # Collect
@@ -787,7 +868,7 @@ get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, color 
 
 
 # Get plot list for Observed vs. Fitted, Residuals, Calibration, Distribution
-get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2), 
+get_plot_performance_regr = function(yhat, y, quantiles = seq(0.05, 0.95, 0.1), 
                                      colors = twocol, gradcol = hexcol, ylim = NULL) {
   
   ## Prepare
@@ -820,6 +901,7 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
     scale_color_manual(values = colors, labels = c("y", expression(paste(hat(y)))), name = " ") +
     labs(title = "Distribution", x = " ") +
     guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+  if (length(ylim)) p_distr = p_distr + xlim(ylim)
   tmp = ggplot_build(p_distr)
   p.inner = ggplot(data = df.distr, aes_string("type", "value")) +
     geom_boxplot(aes_string(color = "type")) +
@@ -828,10 +910,12 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
     scale_color_manual(values = colors, name = " ") +
     theme_void() +
     theme(legend.position = "none")
+  if (length(ylim)) p.inner = p.inner + ylim(ylim)
   p_distr = p_distr + 
     scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
     theme_my +
     annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+  
   
   
   ## Calibration
@@ -919,43 +1003,77 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0,1,0.2),
 get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit,
                                      predictor_names = predictors, target_name = "target",
                                      vars = predictors,  metric = "auc") {
-  #browser()
+  
+  if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
+  
   # Original performance
   if (is.factor(df.for_varimp[[target_name]])) {
-    perf_orig = mysummary_class(data.frame(
-      y = df.for_varimp[[target_name]], 
-      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names], type = "prob")[[2]]))[metric]
+    if (!dmatrix) {
+      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])[[2]]
+    } else {
+      options(na.action = "na.pass")
+      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                       data = df.for_varimp[predictor_names]))
+      options(na.action = "na.omit")
+      yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")[[2]]
+    }
+    perf_orig = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
   } else {
-    perf_orig = mysummary_regr(data.frame(
-      y = df.for_varimp[[target_name]], 
-      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])))[metric]
+    if (!dmatrix) {
+      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+    } else {
+      options(na.action = "na.pass")
+      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                       data = df.for_varimp[predictor_names]))
+      options(na.action = "na.omit")
+      yhat = predict(fit.for_varimp, dm.for_varimp)
+    }
+    perf_orig = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
   }
-
+  
   # Permute
   set.seed(999)
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
-  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret", 
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"), 
                       .export = c("mysummary_class","mysummary_regr")) %dopar% 
-  {
+  { 
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
     if (is.factor(df.for_varimp[[target_name]])) {
-      yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]  #predict
+      if (!dmatrix) {
+        yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]
+      } else {
+        options(na.action = "na.pass")
+        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                  data = df.tmp[predictor_names]))
+        options(na.action = "na.omit")
+        yhat = predict(fit.for_varimp, dm.tmp, type = "prob")[[2]]
+      }
       perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     } else {
-      yhat = predict(fit.for_varimp, df.tmp[predictor_names])  #predict
+      if (!dmatrix) {
+        yhat = predict(fit.for_varimp, df.tmp[predictor_names])
+      } else {
+        options(na.action = "na.pass")
+        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                  data = df.tmp[predictor_names]))
+        options(na.action = "na.omit")
+        yhat = predict(fit.for_varimp, dm.tmp)
+      }        
       perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     }
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+    
   }
   print(Sys.time() - start)
   
   # Calculate importance as scaled performance difference
-  df.varimp = df.varimp %>%
-    mutate(importance = 100 * perfdiff/max(perfdiff)) %>%     
-    arrange(desc(importance))
+  df.varimp = df.varimp %>% 
+    arrange(desc(perfdiff)) %>% 
+    mutate(importance = 100 * perfdiff/max(perfdiff),
+           importance_cum = 100 * cumsum(perfdiff)/sum(perfdiff)) 
   df.varimp 
 }
 
@@ -968,8 +1086,8 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
   df.ggplot = df.plot %>% filter(variable %in% vars)
   if (!is.null(df.plot_boot)) df.ggplot_boot = df.plot_boot %>% filter(variable %in% vars)
   
-  # Plot
-  plot = ggplot(df.ggplot) +
+  # Importancve plot 
+  p_imp = ggplot(df.ggplot) +
     geom_bar(aes(x = reorder(variable, importance), y = importance, fill = color), stat = "identity") +
     scale_fill_manual(values = col) +
     labs(title = paste0("Top ", min(length(vars), length_predictors)," Important Variables (of ", 
@@ -983,7 +1101,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
   if (!is.null(df.plot_boot)) {
     # Add bootstrap lines
     if (bootstrap_lines == TRUE) {
-      plot = plot +
+      p_imp = p_imp +
         geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
                   color = "grey", size = 0.1) +
         geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
@@ -998,12 +1116,27 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
         summarise(sd = sd(importance)) %>% 
         left_join(select(df.ggplot, variable, importance)) %>% 
         mutate(lci = importance - 1.96*sd, rci = importance + 1.96*sd)
-      plot = plot +
+      p_imp = p_imp +
         geom_errorbar(aes(x = variable, ymin = lci, ymax = rci), data = df.help, size = 0.5, width = 0.25)
     }
   }
-  plot
+  
+  
+  # Cumulative importance plot
+  p_impcum = ggplot(df.ggplot) +
+    geom_bar(aes(x = reorder(variable, importance), y = importance_cum, fill = color), stat = "identity") +
+    scale_fill_manual(values = col) +
+    labs(title = paste0("Top ", min(length(vars), length_predictors)," Important Variables (of ", 
+                        length_predictors, ")"), 
+         x = "", y = "Cumulative Importance (in %)") +
+    coord_flip(ylim = c(0, 100)) +
+    guides(fill = guide_legend(reverse = TRUE, title = "")) +
+    theme_my 
+  
+  plots = list(p_imp, p_impcum)
+  plots
 }
+
 
 
 # Partial dependance on green field
@@ -1011,7 +1144,10 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
                           predictor_names = predictors, target_name = "target",
                           vars = topn_vars, levs, quantiles) {
   
-  df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = "caret") %dopar% 
+  if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
+  
+  df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"),
+                          .export = c("prob_samp2full","b_sample","b_all")) %dopar% 
   {
     #i=1
     print(vars[i])
@@ -1021,20 +1157,35 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     
     # Define grid to loop over
     if (is.factor(df.for_partialdep[[vars[i]]])) values = levs[[vars[i]]] else values = quantiles[[vars[i]]]
-
+    
     # Loop over levels for nominal covariables or quantiles for metric covariables
     df.tmp = df.for_partialdep #save original data
     start = Sys.time()
     for (value in values ) {
-      #value = values[1]
+      #value = values[19]
       print(value)
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
       if (is.factor(df.for_partialdep[[target_name]])) {
-        yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]] 
+        if (!dmatrix) {
+          yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]]
+        } else {
+          yhat = predict(fit.for_partialdep, 
+                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                         data = df.tmp[predictor_names])), 
+                         type = "prob")[[2]]
+        }
       } else {
-        yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+        if (!dmatrix) {
+          yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+        } else {
+          yhat = predict(fit.for_partialdep, 
+                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                         data = df.tmp[predictor_names])))
+        }        
       }
-      df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), yhat = mean(yhat), 
+      # IMPORTANT: rescale before averaging
+      df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), 
+                                        yhat = mean(prob_samp2full(yhat, b_sample, b_all)), 
                                         stringsAsFactors = FALSE))
     }
     print(Sys.time() - start)
@@ -1049,15 +1200,11 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
 # Get plot list for partial dependance
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
-                               ylim = NULL,
+                               ylim = NULL, ref = b_all,
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
-  # Reference line
-  if (is.factor(df.for_partialdep[[target_name]])) {
-    ref = mean(ifelse(df.for_partialdep[[target_name]] == levels(df.for_partialdep[[target_name]])[[2]], 1, 0))
-  } else {
-    ref = mean(df.for_partialdep[[target_name]])
-  }
   
+  if (is.null(ylim)) ylim = range(df.for_partialdep[[target_name]])
+
   # Plot
   plots = map(vars, ~ {
     #.x = vars[1]
@@ -1151,7 +1298,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 
 
 # Get plot list for xgboost explainer
-get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_test, 
+get_plot_explainer = function(df.plot = df.predictions, df.values = df.test_explain, 
                               id_name = "id", type = "class", ylim = c(0.01, 0.99), 
                               threshold = NULL, topn = NULL) {
   
@@ -1178,7 +1325,7 @@ get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_tes
     left_join(gather_(df.values, key_col = "variable", value_col = "value", 
                       gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
     mutate(variableandvalue = ifelse(variable %in% c("intercept","..... the rest"), 
-                             variable, paste0(variable," = ",value)))
+                             variable, paste0(variable," = ",round(value,2))))
   
   plots = map(df.plot[[id_name]], ~ {
     #.x = df.plot[1,"id"]
@@ -1421,13 +1568,13 @@ get_plot_explainer = function(df.plot = df.predictions, df.values = df.model_tes
 
 
 #######################################################################################################################-
-# Caret definition of MicrosofMl algorithms ----
+# Caret definition of non-caret algorithms ----
 #######################################################################################################################-
 
 ## rxFastTrees (boosted trees)
 ms_boosttree = list()
 ms_boosttree$label = "MicrosoftML rxFastTrees"
-ms_boosttree$library = "MicrosoftML"
+ms_boosttree$library = c("MicrosoftML","RevoScaleR")
 ms_boosttree$type = c("Regression","Classification")
 ms_boosttree$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE, 
@@ -1477,16 +1624,18 @@ ms_boosttree$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
                   exampleFraction = param$exampleFraction,
                   type = type)
   if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
-  do.call("rxFastTrees", modArgs)
+  do.call(MicrosoftML::rxFastTrees, modArgs)
+  #out = MicrosoftML::rxFastTrees(formula = modArgs$formula, data = modArgs$data, type = modArgs$type)
+  #out
 }
 
 ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
   #browser()
   if (modelFit$problemType == "Classification") {
-    out = rxPredict(modelFit, newdata)$Probability.Y
+    out = RevoScaleR::rxPredict(modelFit, newdata)$Probability.Y
   } else {
     newdata$y = NA
-    out = rxPredict(modelFit, newdata)$Score
+    out = RevoScaleR::rxPredict(modelFit, newdata)$Score
   }
   if (length(modelFit$obsLevels) == 2) {
     out <- ifelse(out >= 0.5, "Y", "N")
@@ -1496,7 +1645,7 @@ ms_boosttree$predict = function(modelFit, newdata, submodels = NULL) {
 
 ms_boosttree$prob = function(modelFit, newdata, submodels = NULL) {
   #browser()
-  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  out = RevoScaleR::rxPredict(modelFit, newdata)[,"Probability.Y"]
   if (length(modelFit$obsLevels) == 2) {
     out <- cbind(out, 1 - out)
     colnames(out) <- c("Y","N")
@@ -1516,7 +1665,7 @@ ms_boosttree$sort = function(x) {
 ## rxForest (random Forest)
 ms_forest = list()
 ms_forest$label = "MicrosoftML rxFastForest"
-ms_forest$library = "MicrosoftML"
+ms_forest$library = c("MicrosoftML","RevoScaleR")
 ms_forest$type = c("Regression","Classification")
 ms_forest$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE,
@@ -1546,16 +1695,16 @@ ms_forest$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
                   splitFraction = param$splitFraction,
                   type = type)
   if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
-  do.call("rxFastForest", modArgs)
+  do.call(MicrosoftML::rxFastForest, modArgs)
 }
 
 ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
   #browser()
   if (modelFit$problemType == "Classification") {
-    out = rxPredict(modelFit, newdata)$Probability.Y
+    out = RevoScaleR::rxPredict(modelFit, newdata)$Probability.Y
   } else {
     newdata$y = NA
-    out = rxPredict(modelFit, newdata)$Score
+    out = RevoScaleR::rxPredict(modelFit, newdata)$Score
   }
   if (length(modelFit$obsLevels) == 2) {
     out <- ifelse(out >= 0.5, "Y", "N")
@@ -1564,7 +1713,7 @@ ms_forest$predict = function(modelFit, newdata, submodels = NULL) {
 }
 
 ms_forest$prob = function(modelFit, newdata, submodels = NULL) {
-  out = rxPredict(modelFit, newdata)[,"Probability.Y"]
+  out = RevoScaleR::rxPredict(modelFit, newdata)[,"Probability.Y"]
   if (length(modelFit$obsLevels) == 2) {
     out <- cbind(out, 1 - out)
     colnames(out) <- c("Y","N")
@@ -1584,7 +1733,7 @@ ms_forest$sort = function(x) {
 
 lgbm = list()
 lgbm$label = "lightgbm"
-lgbm$library = "lightgbm"
+lgbm$library = c("lightgbm","plyr")
 lgbm$type = c("Regression","Classification")
 lgbm$parameters = 
   read.table(header = TRUE, sep = ",", strip.white = TRUE, 
@@ -1620,7 +1769,7 @@ lgbm$grid = function(x, y, len = NULL, search = "grid") {
 
 lgbm$loop = function(grid) {
   #browser()
-  loop <- ddply(grid, 
+  loop <- plyr::ddply(grid, 
                 c("learning_rate", "num_leaves", "feature_fraction", "min_data_in_leaf", "bagging_fraction"), 
                 function(x) c(nrounds = max(x$nrounds)))
   submodels <- vector(mode = "list", length = nrow(loop))
@@ -1639,9 +1788,9 @@ lgbm$loop = function(grid) {
 lgbm$fit = function(x, y, wts, param, lev, last, classProbs, ...) { 
   #browser()
   theDots = list(...)
-  if (is.factor(y)) y = as.numeric(y) - 1
   if (is.factor(y)) objective = "binary" else objective = "regression_l2"
-  modArgs <- list(data = lgb.Dataset(as.matrix(x), label = y),
+  if (is.factor(y)) y = as.numeric(y) - 1
+  modArgs <- list(data = lightgbm::lgb.Dataset(x, label = y),
                   nrounds = param$nrounds,
                   num_leaves = param$num_leaves,
                   min_data_in_leaf = param$min_data_in_leaf,
@@ -1650,8 +1799,7 @@ lgbm$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
                   bagging_fraction = param$bagging_fraction,
                   objective = objective)
   if (length(theDots) > 0) modArgs <- c(modArgs, theDots)
-  list("model" = do.call("lightgbm", modArgs)) #put it into list as it is a S4 object!
-  
+  list("model" = do.call(lightgbm::lightgbm, modArgs)) #put it into list as it is a S4 object!
 }
 
 lgbm$predict = function(modelFit, newdata, submodels = NULL) {
@@ -1712,6 +1860,7 @@ lgbm$prob = function(modelFit, newdata, submodels = NULL) {
 lgbm$levels = function(x) {c("N","Y")}
 
 lgbm$sort = function(x) {
+  #browser()
   x[order(x$nrounds, x$num_leaves, x$learning_rate, x$feature_fraction, 
           x$bagging_fraction), ]
 }

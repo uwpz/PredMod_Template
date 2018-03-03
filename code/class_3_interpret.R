@@ -4,7 +4,7 @@
 #######################################################################################################################-
 
 # Load result from exploration
-load("1_explore.rdata")
+load("class_1_explore.rdata")
 
 # Load libraries and functions
 source("./code/0_init.R")
@@ -17,17 +17,24 @@ registerDoParallel(cl)
 # stopCluster(cl); closeAllConnections() #stop cluster
 
 
+## Tuning parameter to use
+tunepar = expand.grid(nrounds = 100, max_depth = 6, 
+                      eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
+                      min_child_weight = 5, subsample = 0.7)
+
+
 
 
 # Undersample data --------------------------------------------------------------------------------------------
 
 # Just take data from train fold
+n_maxpersample = 300 #Take all but n_maxpersample at most
 summary(df[df$fold == "train", "target"])
 df.train = c()
 for (i in 1:2) {
   i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
   set.seed(i*123)
-  df.train = bind_rows(df.train, df[sample(i.samp, min(1000, length(i.samp))),]) #take all but 1000 at most
+  df.train = bind_rows(df.train, df[sample(i.samp, min(n_maxpersample, length(i.samp))),]) 
 }
 summary(df.train$target)
 
@@ -52,24 +59,22 @@ df.test = df %>% filter(fold == "test")
 
 # Fit
 tmp = Sys.time()
-fit = train( formula, data = df.train[c("target",predictors)], 
-             trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
-             method = "xgbTree",
-             tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                    eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                    min_child_weight = c(10), subsample = c(0.7)))
+fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[predictors])), df.train$target,
+#fit = train(formula, data = df.train[c("target",predictors)],
+            trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
+            method = "xgbTree", 
+            tuneGrid = tunepar)
 Sys.time() - tmp
 
 # Predict
-yhat_test_unscaled = predict(fit, df.test[predictors], type = "prob")[["Y"]]
+yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
+                             type = "prob")[["Y"]]
 summary(yhat_test_unscaled)
-skip = function() {
-  # Predict in parallel (to keep memory consumption small)
-  l.split = split(1:nrow(df.test), (1:nrow(df.test)) %/% 50000)
-  yhat_test_unscaled = foreach(i = 1:length(l.split), .combine = bind_rows) %dopar% {
-    predict(fit, df.test[l.split[[i]],predictors], type = "prob")[["Y"]]
-  }
-}
+# # Scoring in chunks in parallel in case of high memory consumption of xgboost
+# l.split = split(df.test[predictors], (1:nrow(df.test)) %/% 50000)
+# yhat_test_unscaled = foreach(df.split = l.split, .combine = c) %dopar% {
+#   predict(fit, df.split, type = "prob")[[2]]
+# }
 
 # Rescale to non-undersampled data
 yhat_test = prob_samp2full(yhat_test_unscaled, b_sample, b_all)
@@ -78,7 +83,7 @@ y_test = df.test$target
 # Plot performance
 mysummary_class(data.frame(yhat = yhat_test, y = y_test))
 plots = get_plot_performance_class(yhat = yhat_test, y = y_test, reduce_factor = NULL)
-ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+ggsave(paste0(plotloc, "class_performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
 
@@ -90,15 +95,15 @@ ggsave(paste0(plotloc, "performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 
 df.test$residual = as.numeric(y_test) - 1 - yhat_test
 df.test$abs_residual = abs(as.numeric(y_test) - 1 - yhat_test)
 summary(df.test$residual)
-plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-1,1))), 
+plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-1,1), missinfo = misspct)), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = c(-1,1)))
-ggsave(paste0(plotloc, "diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
+ggsave(paste0(plotloc, "class_diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 # Absolute residuals
 summary(df.test$abs_residual)
-plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1))), 
+plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1), missinfo = misspct)), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "abs_residual", ylim = c(0,1)))
-ggsave(paste0(plotloc, "diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
+ggsave(paste0(plotloc, "class_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
 
 
@@ -107,7 +112,7 @@ ggsave(paste0(plotloc, "diagnosis_absolute_residual.pdf"), marrangeGrob(plots, n
 
 #---- Do some bootstrapped fits ----------------------------------------------------------------------------------
 n.boot = 5
-l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dopar% { 
+l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
   
   # Bootstrap
   set.seed(i*1234)
@@ -116,21 +121,23 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR")) %dop
   df.boot = df.train[i.boot,]
   
   # Fit
-  fit = train( formula, data = df.boot[c("target",predictors)], 
-               trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
-               method = "xgbTree",
-               tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                      eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                      min_child_weight = c(10), subsample = c(0.7)))
-  yhat = predict(fit, df.train[i.oob,predictors], type = "prob")[["Y"]]
-  auc = as.numeric((mysummary_class(data.frame(yhat = yhat, y = df.train[i.oob,]$target)))["auc"])
-  return(setNames(list(fit, auc), c(paste0("fit_",i), c(paste0("auc_",i)))))
+  fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.boot[predictors])), df.boot$target,
+              #fit = train(formula, data = df.train[c("target",predictors)],
+              trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
+              method = "xgbTree", 
+              tuneGrid = tunepar)
+  yhat = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,predictors])), 
+                 type = "prob")[["Y"]]
+  perf = as.numeric(mysummary_class(data.frame(yhat = yhat, y = df.train$target[i.oob]))[metric])
+  return(setNames(list(fit, perf), c(paste0("fit_",i), c(paste0(metric,"_",i)))))
 }
 
 # Is it stable?
-map_dbl(1:n.boot, ~ l.boot[[paste0("auc_",.)]]) #on Out-of-bag data
+map_dbl(1:n.boot, ~ l.boot[[paste0(metric,"_",.)]]) #on Out-of-bag data
 map_df(1:n.boot, ~ {
-  yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], df.test[predictors], type = "prob")[["Y"]]
+  yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], 
+                          xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
+                          type = "prob")[["Y"]]
   yhat = prob_samp2full(yhat_unscaled, b_sample, b_all)
   data.frame(t(mysummary_class(data.frame(yhat = prob_samp2full(yhat_unscaled, b_sample, b_all), y = df.test$target)))) 
 })
@@ -144,17 +151,18 @@ map_df(1:n.boot, ~ {
 df.varimp_train = get_varimp_by_permutation(df.train, fit, vars = predictors, metric = metric)
 predictors_top = df.varimp_train %>% filter(importance > 10) %>% .$variable
 formula_top = as.formula(paste("target", "~", paste(predictors_top, collapse = " + ")))
+formula_top_rightside = as.formula(paste("~", paste(predictors_top, collapse = " + ")))
 
 # Fit again -> possibly tune nrounds again
-fit_top = train(formula_top, data = df.train[c("target",predictors_top)], 
-                trControl = trainControl(method = "none", returnData = TRUE, allowParallel = FALSE), 
-                method = "xgbTree",
-                tuneGrid = expand.grid(nrounds = 400, max_depth = c(6),
-                                       eta = c(0.02), gamma = 0, colsample_bytree = c(0.7),
-                                       min_child_weight = c(10), subsample = c(0.7)))
+fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[predictors_top])), df.train$target,
+                trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
+                method = "xgbTree", 
+                tuneGrid = tunepar)
 
 # Plot performance
-tmp = prob_samp2full(predict(fit_top, df.test[predictors_top], type = "prob")[["Y"]], b_sample, b_all)
+tmp = prob_samp2full(predict(fit_top, 
+                             xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[predictors_top])),
+                             type = "prob")[["Y"]], b_sample, b_all)
 plots = get_plot_performance_class(yhat = tmp, y = df.test$target, reduce_factor = NULL)
 plots[1]
 
@@ -185,7 +193,7 @@ topn = 10
 topn_vars = df.varimp[1:topn, "variable"]
 
 # Add other information (e.g. special coloring): color variable is needed -> fill with "dummy" if it should be ommited
-df.varimp %<>% mutate(color = cut(importance, c(-1,10,50,100), labels = c("low","middle","high")))
+df.varimp %<>% mutate(color = cut(importance, c(-1,10,50,101), labels = c("low","middle","high")))
 
 
 
@@ -201,12 +209,24 @@ for (i in 1:n.boot) {
                 mutate(run = i))
 }
 
-
-
 # Plot
-plot = get_plot_varimp(df.varimp, topn_vars, df.plot_boot = df.varimp_boot)
-ggsave(paste0(plotloc, "variable_importance.pdf"), plot, w = 8, h = 6)
+plots = get_plot_varimp(df.varimp, topn_vars, df.plot_boot = df.varimp_boot)
+ggsave(paste0(plotloc, "class_variable_importance.pdf"), marrangeGrob(plots, ncol = 2, nrow = 1), w = 12, h = 8)
 
+
+
+
+#--- Compare variable importance for train and test -------------------------------------------------------------------
+
+df.tmp = df.varimp[c("variable","importance")] %>% rename("train" = "importance") %>% 
+  left_join(df.varimp_train[c("variable","importance")] %>% rename("test" = "importance"), by = "variable") %>% 
+  gather(key = type, value = importance, train, test) 
+  
+ggplot(df.tmp, aes(variable, importance)) +
+  geom_bar(aes(fill = type), position = "dodge", stat="identity") +
+  scale_x_discrete(limits = rev(df.varimp$variable)) +
+  scale_fill_discrete(limits = c("train","test")) +
+  coord_flip()
 
 
 
@@ -224,8 +244,8 @@ df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quan
 df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0,0.3))
-ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0.2,0.5))
+ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -249,8 +269,8 @@ df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample, b_al
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0,0.3))
-ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0.2,0.5))
+ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -261,35 +281,36 @@ ggsave(paste0(plotloc, "partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, 
 #|||| xgboost Explainer ||||----
 #######################################################################################################################-
 
+# Derive id
+df.test$id = 1:nrow(df.test)
+
+
 ## Derive betas for all test cases
 
 # Value data frame
-#i.top = order(yhat_test, decreasing = TRUE)[1:20]
-i.top = 1:20
-df.model_test = df.test[i.top,c("target",predictors)]
-df.model_test$id = 1:nrow(df.model_test)
+i.top = order(yhat_test, decreasing = TRUE)[1:20]
+i.bottom = order(yhat_test)[1:20]
+i.random = sample(1:length(yhat_test), 20)
+i.explain = sample(unique(c(i.top, i.bottom, i.random)))
+ids = df.test$id[i.explain]
 
-# Get model matrix and DMatrix
-m.model_train = model.matrix(formula, data = df.train[c("target",predictors)], contrasts = NULL)
-m.train = xgb.DMatrix(m.model_train[,-1])
-m.model_test = model.matrix(formula, data = df.model_test, contrasts = NULL)
-m.test = xgb.DMatrix(m.model_test[,-1])
-
-# Value data frame
-df.model_test = as.data.frame(m.model_test[,-1])
-df.model_test$id = 1:nrow(df.model_test)	 
+# Get model matrix and DMatrix for train and test (sample) data
+m.model_train = sparse.model.matrix(formula_rightside, data = df.train[predictors])
+dm.train = xgb.DMatrix(m.model_train) 
+m.test_explain = sparse.model.matrix(formula_rightside, data = df.test[i.explain,predictors])
+dm.test_explain = xgb.DMatrix(m.test_explain)
+df.test_explain = as.data.frame(as.matrix(m.test_explain))
 
 # Create explainer data table from train data
-df.explainer = buildExplainer(fit$finalModel, m.train, type = "binary")
+df.explainer = buildExplainer(fit$finalModel, dm.train, type = "binary")
 
 # Switch coefficients (as explainer takes "N" as target = 1)
 cols = setdiff(colnames(df.explainer), c("leaf","tree"))
 df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
 
-# Get predictions for all test data
-df.predictions = explainPredictions(fit$finalModel, df.explainer, m.test)
+# Get predictions for test data
+df.predictions = explainPredictions(fit$finalModel, df.explainer, dm.test_explain)
 df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
-df.predictions$id = 1:nrow(df.predictions)
 
 # Aggregate predictions for all nominal variables
 df.predictions = as.data.frame(df.predictions)
@@ -298,21 +319,28 @@ df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
 for (i in 1:length(fit$xlevels)) {
   #i=1
   varname = names(fit$xlevels)[i]
-  #levnames = paste0(varname, fit$xlevels[[i]][-1])
   levnames = as.character(df.map[df.map$varname == varname,]$levname)
   df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
   df.predictions[levnames] = NULL
 }
 
+# Check
+inv.logit(rowSums(df.predictions[,-1]))
+yhat_test[i.explain]
 
 
 ## Plot
-plots = get_plot_explainer(df.plot = df.predictions, df.values = df.model_test, type = "class", topn = 10)
-ggsave(paste0(plotloc, "explanations.pdf"), marrangeGrob(plots, ncol = 1, nrow = 2), 
+df.test_explain$id = ids 
+df.predictions$id = ids  
+plots = get_plot_explainer(df.plot = df.predictions, df.values = df.test_explain, type = "class", topn = 10, 
+                           ylim = c(0.01,0.1))
+ggsave(paste0(plotloc,"class_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
        w = 18, h = 12)
 
 
-#save.image("3_interpret.rdata")
+
+#save.image("class_3_interpret.rdata")
+#load("class_3_interpret.rdata")
 
 
 
