@@ -15,7 +15,6 @@ skip = function() {
 library(Matrix)
 library(plyr) #always load plyr before dplyr
 library(tidyverse) #ggplot2,tibble,tidyr,readr,purrr,dplyr
-library(seplyr)
 library(forcats)
 library(stringr)
 library(lubridate)
@@ -75,7 +74,7 @@ manycol = c('#00FF00','#0000FF','#FF0000','#01FFFE','#FFA6FE','#FFDB66','#006401
             '#008F9C','#98FF52','#7544B1','#B500FF','#00FF78','#FF6E41','#005F39','#6B6882','#5FAD4E','#A75740',
             '#A5FFD2','#FFB167','#009BFF','#E85EBE')
 #barplot(1:length(manycol), col = manycol)
-fourcol = manycol[1:4]
+fourcol = c("#F8766D","#00BA38","#619CFF","#B79F00")
 
 # Themes
 theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
@@ -176,16 +175,17 @@ mysummary_regr = function(data, lev = NULL, model = NULL)
 
 
 # Custom summary function for multiclass performance (use by caret)
-mysummary_multiclass = function (data, lev = NULL, model = NULL) 
-{
+mysummary_multiclass = function (data, lev = NULL, model = NULL) {
   
   if ("y" %in% colnames(data)) data$obs = data$y
-  if (!("pred" %in% colnames(data))) pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, function(x) which.max(x))], 
+  if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
+                                                                               function(x) which.max(x))], 
                                                    levels = levels(data$obs))
   #browser()
   if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
   
   # Logloss stats
+  if (is.null(lev)) lev = levels(data$obs)
   lloss <- mnLogLoss(data = data, lev = lev, model = model)
   
   # AUC stats
@@ -193,7 +193,7 @@ mysummary_multiclass = function (data, lev = NULL, model = NULL)
     obs <- ifelse(data[, "obs"] == x, 1, 0)
     prob <- data[, x]
     AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
-    AUCs = max(AUCs, 1-AUCs)
+    AUCs = max(AUCs, 1 - AUCs)
     return(AUCs)
   })
   roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
@@ -799,7 +799,7 @@ get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, quanti
     scale_color_manual(values = c("blue","red"), name = "Target (y)") +
     labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
     guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
-    facet_wrap("target", scales = "free_y")
+    facet_wrap("target", scales = "free")
   
   # Gain + Lift
   p_gain = ggplot(df.gainlift_all) +

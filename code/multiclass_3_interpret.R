@@ -4,7 +4,7 @@
 #######################################################################################################################-
 
 # Load result from exploration
-load("class_1_explore.rdata")
+load("multiclass_1_explore.rdata")
 
 # Load libraries and functions
 source("./code/0_init.R")
@@ -31,7 +31,7 @@ tunepar = expand.grid(nrounds = 100, max_depth = 6,
 n_maxpersample = 300 #Take all but n_maxpersample at most
 summary(df[df$fold == "train", "target"])
 df.train = c()
-for (i in 1:2) {
+for (i in 1:length(levels(df$target))) {
   i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
   set.seed(i*123)
   df.train = bind_rows(df.train, df[sample(i.samp, min(n_maxpersample, length(i.samp))),]) 
@@ -39,11 +39,11 @@ for (i in 1:2) {
 summary(df.train$target)
 
 # Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
-b_all = mean(df %>% filter(fold == "train") %>% .$target_num)
-b_sample = mean(df.train$target_num)
+b_all = df$target[df$fold == "train"] %>% (function(.) {summary(.)/length(.)})
+b_sample = df$target %>% (function(.) {summary(.)/length(.)})
 
 # Set metric for peformance comparison
-metric = "auc"
+metric = "Mean_AUC"
 
 # Define test data
 df.test = df %>% filter(fold == "test")
@@ -68,22 +68,22 @@ Sys.time() - tmp
 
 # Predict
 yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
-                             type = "prob")[["Y"]]
+                             type = "prob")
 summary(yhat_test_unscaled)
 # # Scoring in chunks in parallel in case of high memory consumption of xgboost
 # l.split = split(df.test[predictors], (1:nrow(df.test)) %/% 50000)
 # yhat_test_unscaled = foreach(df.split = l.split, .combine = c) %dopar% {
-#   predict(fit, df.split, type = "prob")[[2]]
+#   predict(fit, df.split, type = "prob")
 # }
 
 # Rescale to non-undersampled data
-yhat_test = prob_samp2full(yhat_test_unscaled, b_sample, b_all)
+yhat_test = as.data.frame((as.matrix(yhat_test_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
 y_test = df.test$target
 
 # Plot performance
-mysummary_class(data.frame(yhat = yhat_test, y = y_test))
-plots = get_plot_performance_class(yhat = yhat_test, y = y_test, reduce_factor = NULL)
-ggsave(paste0(plotloc, "class_performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
+mysummary_multiclass(data.frame(yhat_test, y = y_test))
+plots = get_plot_performance_multiclass(yhat = yhat_test, y = y_test, reduce_factor = NULL, colors = fourcol)
+ggsave(paste0(plotloc, "multiclass_performance.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
 
@@ -92,18 +92,18 @@ ggsave(paste0(plotloc, "class_performance.pdf"), marrangeGrob(plots, ncol = 4, n
 #---- Check residuals ----------------------------------------------------------------------------------
 
 # Residuals
-df.test$residual = as.numeric(y_test) - 1 - yhat_test
+df.test$residual = ifelse(y_test == "Cat_1", 1, 0) - yhat_test[,1]
 df.test$abs_residual = abs(df.test$residual)
 summary(df.test$residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = c(-1,1), missinfo = misspct)), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = c(-1,1)))
-ggsave(paste0(plotloc, "class_diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
+ggsave(paste0(plotloc, "multiclass_diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
 # Absolute residuals
 summary(df.test$abs_residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "abs_residual", ylim = c(0,1), missinfo = misspct)), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "abs_residual", ylim = c(0,1)))
-ggsave(paste0(plotloc, "class_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
+ggsave(paste0(plotloc, "multiclass_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
 
 
@@ -111,7 +111,7 @@ ggsave(paste0(plotloc, "class_diagnosis_absolute_residual.pdf"), marrangeGrob(pl
 
 
 #---- Do some bootstrapped fits ----------------------------------------------------------------------------------
-n.boot = 5
+n.boot = 3
 l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
   
   # Bootstrap

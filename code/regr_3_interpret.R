@@ -75,7 +75,7 @@ ggsave(paste0(plotloc, "regr_performance.pdf"), marrangeGrob(plots, ncol = 3, nr
 
 # Residuals
 df.test$residual = y_test - yhat_test
-df.test$abs_residual = abs(y_test - yhat_test)
+df.test$abs_residual = abs(df.test$residual)
 summary(df.test$residual)
 plots = c(suppressMessages(get_plot_distr_metr_regr(df.test, metr, target_name = "residual", ylim = NULL, missinfo = misspct)), 
           get_plot_distr_nomi_regr(df.test, nomi, target_name = "residual", ylim = NULL))

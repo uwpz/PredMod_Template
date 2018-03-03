@@ -77,8 +77,8 @@ df[metr_binned] = map(df[metr_binned], ~ fct_explicit_na(., na_level = "(Missing
 summary(df[metr_binned],11)
 
 # Remove binned variables with just 1 bin
-metr_binned = setdiff(metr_binned, c("Low_Qual_Fin_SF_BINNED_","threeSsn_Porch_BINNED_",
-                                     "Pool_Area_BINNED_","Misc_Val_BINNED_"))
+onebin = metr_binned[map_lgl(metr_binned, ~ length(levels(df[[.]])) == 1)]
+metr_binned = setdiff(metr_binned, onebin)
 
 
 
@@ -113,7 +113,7 @@ summary(df[metr])
 # Check for outliers and skewness
 plots = get_plot_distr_metr_class(df, metr, color = fourcol, missinfo = misspct, offset = 7)
 ggsave(paste0(plotloc, "multiclass_distr_metr.pdf"), 
-       suppressMessages(marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL)), 
+       marrangeGrob(plots, ncol = 4, nrow = 2, top = NULL), 
        width = 18, height = 12)
 
 # Winsorize
@@ -142,9 +142,7 @@ df[,metr] = map(df[metr], ~ {
 
 # Univariate variable importance
 tmp = filterVarImp(df[metr], df$target, nonpara = TRUE) %>% as.matrix() 
-i.tmp = which(tmp < 0.5)
-tmp[i.tmp] = 1- tmp[i.tmp]
-varimp = round(tmp, 2)
+varimp = round(rowMeans(pmax(tmp, 1 - tmp)), 2)
 names(varimp) = metr
 
 # Plot 
@@ -174,10 +172,9 @@ metr_binned = setdiff(metr_binned, c("xxx_BINNED_")) #Put at xxx the variables t
 
 # Univariate variable importance
 df$fold_test = factor(ifelse(df$fold == "test", "Y", "N"))
-varimp = filterVarImp(df[metr], df$fold_test, nonpara = TRUE) %>% 
-  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+tmp = filterVarImp(df[metr], df$fold_test, nonpara = TRUE) %>% as.matrix() 
+varimp = round(rowMeans(pmax(tmp, 1 - tmp)), 2)
 names(varimp) = metr
-varimp[order(varimp, decreasing = TRUE)]
 
 # Plot 
 plots = get_plot_distr_metr_class(df, metr, target_name = "fold_test", missinfo = misspct, varimpinfo = varimp)
@@ -229,9 +226,7 @@ summary(df[nomi], topn_toomany + 2)
 
 # Univariate variable importance
 tmp = filterVarImp(df[nomi], df$target, nonpara = TRUE) %>% as.matrix() 
-i.tmp = which(tmp < 0.5)
-tmp[i.tmp] = 1- tmp[i.tmp]
-varimp = round(rowMeans(tmp), 2)
+varimp = round(rowMeans(pmax(tmp, 1 - tmp)), 2)
 names(varimp) = nomi
 
 # Check
@@ -259,11 +254,9 @@ nomi = setdiff(nomi, c("MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Mas_Vnr_Are
 # Time/fold depedency --------------------------------------------------------------------------------------------
 
 # Univariate variable importance
-varimp = filterVarImp(df[nomi], df$fold_test, nonpara = TRUE) %>% 
-  mutate(Y = round(ifelse(Y < 0.5, 1 - Y, Y),2)) %>% .$Y
+tmp = filterVarImp(df[nomi], df$fold_test, nonpara = TRUE) %>% as.matrix() 
+varimp = round(rowMeans(pmax(tmp, 1 - tmp)), 2)
 names(varimp) = nomi
-varimp[order(varimp, decreasing = TRUE)]
-
 
 # Check
 plots = get_plot_distr_nomi_class(df, nomi, target_name = "fold_test", varimpinfo = varimp)
