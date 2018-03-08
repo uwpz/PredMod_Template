@@ -197,7 +197,7 @@ mysummary_multiclass = function (data, lev = NULL, model = NULL) {
     return(AUCs)
   })
   roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
-                 "Weighted_AUC" = mean(unlist(prob_stats) * table(data$obs)/nrow(data)))
+                 "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
   
   # confusion Matrix stats
   CM <- confusionMatrix(data[, "pred"], data[, "obs"])
@@ -1015,9 +1015,17 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
                                                        data = df.for_varimp[predictor_names]))
       options(na.action = "na.omit")
-      yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")[[2]]
+      yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
+      if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
     }
-    perf_orig = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
+    if (length(levels(df.for_varimp[[target_name]])) == 2) {
+      perf_orig = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
+                                             yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
+    } else {
+      perf_orig = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
+                                                  as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
+                                                                  (function(x) x/rowSums(x)))))[metric]
+    }
   } else {
     if (!dmatrix) {
       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
@@ -1035,8 +1043,9 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   set.seed(999)
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
-  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"), 
-                      .export = c("mysummary_class","mysummary_regr")) %dopar% 
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"), 
+                      .export = c("mysummary_class","mysummary_multiclass","mysummary_regr",
+                                  "prob_samp2full","b_sample", "b_all")) %dopar% 
   { 
     #i=1
     df.tmp = df.for_varimp
@@ -1049,9 +1058,17 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
                                                   data = df.tmp[predictor_names]))
         options(na.action = "na.omit")
-        yhat = predict(fit.for_varimp, dm.tmp, type = "prob")[[2]]
+        yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
+        if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
       }
-      perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
+      if (length(levels(df.for_varimp[[target_name]])) == 2) {
+        perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
+                                          yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
+      } else {
+        perf = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
+                                               as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
+                                                               (function(x) x/rowSums(x)))))[metric]    
+      }
     } else {
       if (!dmatrix) {
         yhat = predict(fit.for_varimp, df.tmp[predictor_names])

@@ -112,7 +112,7 @@ ggsave(paste0(plotloc, "multiclass_diagnosis_absolute_residual.pdf"), marrangeGr
 
 #---- Do some bootstrapped fits ----------------------------------------------------------------------------------
 n.boot = 3
-l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
+l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix","dplyr")) %dopar% { 
   
   # Bootstrap
   set.seed(i*1234)
@@ -122,13 +122,13 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboo
   
   # Fit
   fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.boot[predictors])), df.boot$target,
-              #fit = train(formula, data = df.train[c("target",predictors)],
               trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
               method = "xgbTree", 
               tuneGrid = tunepar)
-  yhat = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,predictors])), 
-                 type = "prob")[["Y"]]
-  perf = as.numeric(mysummary_class(data.frame(yhat = yhat, y = df.train$target[i.oob]))[metric])
+  yhat_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,predictors])), 
+                 type = "prob")
+  yhat = as.data.frame((as.matrix(yhat_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  perf = as.numeric(mysummary_multiclass(data.frame(yhat, y = df.train$target[i.oob]))[metric])
   return(setNames(list(fit, perf), c(paste0("fit_",i), c(paste0(metric,"_",i)))))
 }
 
@@ -137,9 +137,9 @@ map_dbl(1:n.boot, ~ l.boot[[paste0(metric,"_",.)]]) #on Out-of-bag data
 map_df(1:n.boot, ~ {
   yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], 
                           xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
-                          type = "prob")[["Y"]]
-  yhat = prob_samp2full(yhat_unscaled, b_sample, b_all)
-  data.frame(t(mysummary_class(data.frame(yhat = prob_samp2full(yhat_unscaled, b_sample, b_all), y = df.test$target)))) 
+                          type = "prob")
+  yhat = as.data.frame((as.matrix(yhat_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  data.frame(t(mysummary_multiclass(data.frame(yhat, y = df.test$target)))) 
 })
 
 
@@ -160,10 +160,10 @@ fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[
                 tuneGrid = tunepar)
 
 # Plot performance
-tmp = prob_samp2full(predict(fit_top, 
-                             xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[predictors_top])),
-                             type = "prob")[["Y"]], b_sample, b_all)
-plots = get_plot_performance_class(yhat = tmp, y = df.test$target, reduce_factor = NULL)
+tmp = as.data.frame((as.matrix(predict(fit_top, 
+                                       xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[predictors_top])),
+                                       type = "prob")) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+plots = get_plot_performance_multiclass(tmp, y = df.test$target, reduce_factor = NULL, colors = fourcol)
 plots[1]
 
 
@@ -211,7 +211,7 @@ for (i in 1:n.boot) {
 
 # Plot
 plots = get_plot_varimp(df.varimp, topn_vars, df.plot_boot = df.varimp_boot)
-ggsave(paste0(plotloc, "class_variable_importance.pdf"), marrangeGrob(plots, ncol = 2, nrow = 1), w = 12, h = 8)
+ggsave(paste0(plotloc, "multiclass_variable_importance.pdf"), marrangeGrob(plots, ncol = 2, nrow = 1), w = 12, h = 8)
 
 
 
@@ -223,7 +223,7 @@ df.tmp = df.varimp[c("variable","importance")] %>% rename("train" = "importance"
   gather(key = type, value = importance, train, test) 
   
 ggplot(df.tmp, aes(variable, importance)) +
-  geom_bar(aes(fill = type), position = "dodge", stat="identity") +
+  geom_bar(aes(fill = type), position = "dodge", stat = "identity") +
   scale_x_discrete(limits = rev(df.varimp$variable)) +
   scale_fill_discrete(limits = c("train","test")) +
   coord_flip()
@@ -235,17 +235,22 @@ ggplot(df.tmp, aes(variable, importance)) +
 #|||| Partial Dependance ||||----
 #######################################################################################################################-
 
+df.test$target_onelev = factor(ifelse(df.test$target == "Cat_1", "Y", "N"))
+
 ## Partial depdendance for "total" fit 
 levs = map(df.test[nomi], ~ levels(.))
 quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
-df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
+df.partialdep = get_partialdep(df.test, fit, target_name = "target_onelev", vars = topn_vars, levs = levs, 
+                               quantiles = quantiles)
 
 # Rescale
-df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
+df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample[1], b_all[1])
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0.2,0.5))
-ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, 
+                            target_name = "target_onelev", ref = b_all[1], 
+                            ylim = c(0.2,0.5))
+ggsave(paste0(plotloc, "multiclass_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -258,19 +263,21 @@ for (i in 1:n.boot) {
   df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
   #df.test_boot = df.test
   df.partialdep_boot %<>% 
-    bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], 
+    bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], target_name = "target_onelev",  
                              vars = topn_vars, levs = levs, quantiles = quantiles) %>% 
                 mutate(run = i))
 }
 
 # Rescale
-df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample, b_all)
+df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample[1], b_all[1])
 
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0.2,0.5))
-ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, 
+                            target_name = "target_onelev", ref = b_all[1], 
+                            ylim = c(0.2,0.5))
+ggsave(paste0(plotloc, "multiclass_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
 
@@ -281,66 +288,66 @@ ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol
 #|||| xgboost Explainer ||||----
 #######################################################################################################################-
 
-# Derive id
-df.test$id = 1:nrow(df.test)
+# # Derive id
+# df.test$id = 1:nrow(df.test)
+# 
+# 
+# ## Derive betas for all test cases
+# 
+# # Value data frame
+# i.top = order(yhat_test, decreasing = TRUE)[1:20]
+# i.bottom = order(yhat_test)[1:20]
+# i.random = sample(1:length(yhat_test), 20)
+# i.explain = sample(unique(c(i.top, i.bottom, i.random)))
+# ids = df.test$id[i.explain]
+# 
+# # Get model matrix and DMatrix for train and test (sample) data
+# m.model_train = sparse.model.matrix(formula_rightside, data = df.train[predictors])
+# dm.train = xgb.DMatrix(m.model_train) 
+# m.test_explain = sparse.model.matrix(formula_rightside, data = df.test[i.explain,predictors])
+# dm.test_explain = xgb.DMatrix(m.test_explain)
+# df.test_explain = as.data.frame(as.matrix(m.test_explain))
+# 
+# # Create explainer data table from train data
+# df.explainer = buildExplainer(fit$finalModel, dm.train, type = "binary")
+# 
+# # Switch coefficients (as explainer takes "N" as target = 1)
+# cols = setdiff(colnames(df.explainer), c("leaf","tree"))
+# df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
+# 
+# # Get predictions for test data
+# df.predictions = explainPredictions(fit$finalModel, df.explainer, dm.test_explain)
+# df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
+# 
+# # Aggregate predictions for all nominal variables
+# df.predictions = as.data.frame(df.predictions)
+# df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
+#                     levname = colnames(m.model_train)[-1])
+# for (i in 1:length(fit$xlevels)) {
+#   #i=1
+#   varname = names(fit$xlevels)[i]
+#   levnames = as.character(df.map[df.map$varname == varname,]$levname)
+#   df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
+#   df.predictions[levnames] = NULL
+# }
+# 
+# # Check
+# inv.logit(rowSums(df.predictions[,-1]))
+# yhat_test[i.explain]
+# 
+# 
+# ## Plot
+# df.test_explain$id = ids 
+# df.predictions$id = ids  
+# plots = get_plot_explainer(df.plot = df.predictions, df.values = df.test_explain, type = "class", topn = 10, 
+#                            ylim = c(0.01,0.1))
+# ggsave(paste0(plotloc,"class_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
+#        w = 18, h = 12)
+# 
 
 
-## Derive betas for all test cases
-
-# Value data frame
-i.top = order(yhat_test, decreasing = TRUE)[1:20]
-i.bottom = order(yhat_test)[1:20]
-i.random = sample(1:length(yhat_test), 20)
-i.explain = sample(unique(c(i.top, i.bottom, i.random)))
-ids = df.test$id[i.explain]
-
-# Get model matrix and DMatrix for train and test (sample) data
-m.model_train = sparse.model.matrix(formula_rightside, data = df.train[predictors])
-dm.train = xgb.DMatrix(m.model_train) 
-m.test_explain = sparse.model.matrix(formula_rightside, data = df.test[i.explain,predictors])
-dm.test_explain = xgb.DMatrix(m.test_explain)
-df.test_explain = as.data.frame(as.matrix(m.test_explain))
-
-# Create explainer data table from train data
-df.explainer = buildExplainer(fit$finalModel, dm.train, type = "binary")
-
-# Switch coefficients (as explainer takes "N" as target = 1)
-cols = setdiff(colnames(df.explainer), c("leaf","tree"))
-df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
-
-# Get predictions for test data
-df.predictions = explainPredictions(fit$finalModel, df.explainer, dm.test_explain)
-df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
-
-# Aggregate predictions for all nominal variables
-df.predictions = as.data.frame(df.predictions)
-df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
-                    levname = colnames(m.model_train)[-1])
-for (i in 1:length(fit$xlevels)) {
-  #i=1
-  varname = names(fit$xlevels)[i]
-  levnames = as.character(df.map[df.map$varname == varname,]$levname)
-  df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
-  df.predictions[levnames] = NULL
-}
-
-# Check
-inv.logit(rowSums(df.predictions[,-1]))
-yhat_test[i.explain]
-
-
-## Plot
-df.test_explain$id = ids 
-df.predictions$id = ids  
-plots = get_plot_explainer(df.plot = df.predictions, df.values = df.test_explain, type = "class", topn = 10, 
-                           ylim = c(0.01,0.1))
-ggsave(paste0(plotloc,"class_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
-       w = 18, h = 12)
-
-
-
-#save.image("class_3_interpret.rdata")
-#load("class_3_interpret.rdata")
+#save.image("mulitclass_3_interpret.rdata")
+#load("multiclass_3_interpret.rdata")
 
 
 

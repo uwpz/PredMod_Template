@@ -139,7 +139,7 @@ map_df(1:n.boot, ~ {
                           xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
                           type = "prob")[["Y"]]
   yhat = prob_samp2full(yhat_unscaled, b_sample, b_all)
-  data.frame(t(mysummary_class(data.frame(yhat = prob_samp2full(yhat_unscaled, b_sample, b_all), y = df.test$target)))) 
+  data.frame(t(mysummary_class(data.frame(yhat = yhat, y = df.test$target)))) 
 })
 
 
