@@ -283,11 +283,11 @@ df.predictions = explainPredictions(fit$finalModel, df.explainer, dm.test_explai
 
 # Aggregate predictions for all nominal variables
 df.predictions = as.data.frame(df.predictions)
-df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
+df.map = data.frame(varname = predictors[attr(model.matrix(formula_rightside, data = df.train[1,predictors]), "assign")],
                     levname = colnames(m.model_train)[-1])
-for (i in 1:length(fit$xlevels)) {
+for (i in 1:length(nomi)) {
   #i=1
-  varname = names(fit$xlevels)[i]
+  varname = nomi[i]
   levnames = as.character(df.map[df.map$varname == varname,]$levname)
   df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
   df.predictions[levnames] = NULL

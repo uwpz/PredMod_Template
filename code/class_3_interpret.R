@@ -139,7 +139,7 @@ map_df(1:n.boot, ~ {
                           xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
                           type = "prob")[["Y"]]
   yhat = prob_samp2full(yhat_unscaled, b_sample, b_all)
-  data.frame(t(mysummary_class(data.frame(yhat = prob_samp2full(yhat_unscaled, b_sample, b_all), y = df.test$target)))) 
+  data.frame(t(mysummary_class(data.frame(yhat = yhat, y = df.test$target)))) 
 })
 
 
@@ -240,9 +240,6 @@ levs = map(df.test[nomi], ~ levels(.))
 quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
 df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
 
-# Rescale
-df.partialdep$yhat = prob_samp2full(df.partialdep$yhat, b_sample, b_all)
-
 # Visual check whether all fits 
 plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = c(0.2,0.5))
 ggsave(paste0(plotloc, "class_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
@@ -314,11 +311,11 @@ df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$interce
 
 # Aggregate predictions for all nominal variables
 df.predictions = as.data.frame(df.predictions)
-df.map = data.frame(varname = predictors[attr(m.model_train, "assign")],
+df.map = data.frame(varname = predictors[attr(model.matrix(formula_rightside, data = df.train[1,predictors]), "assign")],
                     levname = colnames(m.model_train)[-1])
-for (i in 1:length(fit$xlevels)) {
+for (i in 1:length(nomi)) {
   #i=1
-  varname = names(fit$xlevels)[i]
+  varname = nomi[i]
   levnames = as.character(df.map[df.map$varname == varname,]$levname)
   df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
   df.predictions[levnames] = NULL
