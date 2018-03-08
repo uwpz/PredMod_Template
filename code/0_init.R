@@ -1178,17 +1178,17 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     df.tmp = df.for_partialdep #save original data
     start = Sys.time()
     for (value in values ) {
-      #value = values[19]
+      #value = values[1]
       print(value)
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
       if (is.factor(df.for_partialdep[[target_name]])) {
         if (!dmatrix) {
-          yhat = predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]]
+          yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]], b_sample, b_all)
         } else {
-          yhat = predict(fit.for_partialdep, 
+          yhat = prob_samp2full(predict(fit.for_partialdep, 
                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
                                                          data = df.tmp[predictor_names])), 
-                         type = "prob")[[2]]
+                         type = "prob")[[2]], b_sample, b_all)
         }
       } else {
         if (!dmatrix) {
@@ -1200,8 +1200,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
         }        
       }
       # IMPORTANT: rescale before averaging
-      df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), 
-                                        yhat = mean(prob_samp2full(yhat, b_sample, b_all)), 
+      df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), yhat = mean(yhat), 
                                         stringsAsFactors = FALSE))
     }
     print(Sys.time() - start)
@@ -1313,10 +1312,64 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 }
 
 
+# Get explanations data
+get_explanations = function(fit.for_explain = fit,
+                            df.train_explain = df.train[predictors], 
+                            df.test_explain = df.test[i.explain, c("id", predictors)],
+                            id_name = "id", predictor_names = predictors, formula = formula_rightside,
+                            type = "class") {
+  
+  # Get model matrix and DMatrix for train and test (sample) data
+  m.model_train = sparse.model.matrix(formula_rightside, data = df.train_explain[predictor_names])
+  dm.train = xgb.DMatrix(m.model_train) 
+  m.test_explain = sparse.model.matrix(formula_rightside, data = df.test_explain[predictor_names])
+  dm.test_explain = xgb.DMatrix(m.test_explain)
+  
+  
+  
+  ## Create explainer data table from train data
+  if (type == "class") {
+    df.explainer = buildExplainer(fit.for_explain$finalModel, dm.train, type = "binary")
+    
+    # Switch coefficients (as explainer takes "N" as target = 1)
+    cols = setdiff(colnames(df.explainer), c("leaf","tree"))
+    df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
+  } else {
+    df.explainer = buildExplainer(fit.for_explain$finalModel, dm.train, type = "regression")
+  }
+  
+  
+  ## Get explanations for predictions of test data
+  df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, dm.test_explain)
+  if (type == "class") {
+    df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
+  }
+  
+  # Aggregate predictions for all nominal variables
+  df.predictions = as.data.frame(df.predictions)
+  df.map = data.frame(varname = predictors[attr(model.matrix(formula, data = df.train[1,predictor_names]), "assign")],
+                      levname = colnames(m.model_train)[-1])
+  for (i in 1:length(nomi)) {
+    #i=1
+    varname = nomi[i]
+    levnames = as.character(df.map[df.map$varname == varname,]$levname)
+    df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
+    df.predictions[levnames] = NULL
+  }
+  
+  # Check
+  if (type == "class") left = inv.logit(rowSums(df.predictions[,-1])) else left = rowSums(df.predictions[,-1])
+  if (all.equal(left, yhat_test[i.explain], tolerance = 1e-5)) print("Predictions and explanations map")
+  else print("Predictions and explanations DO NOT map!!!")
+  
+  df.predictions$id = df.test_explain$id 
+  df.predictions
+}
+
 # Get plot list for xgboost explainer
-get_plot_explainer = function(df.plot = df.predictions, df.values = df.test_explain, 
-                              id_name = "id", type = "class", ylim = c(0.01, 0.99), 
-                              threshold = NULL, topn = NULL) {
+get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_explain, 
+                                 id_name = "id", type = "class", ylim = c(0.01, 0.99), 
+                                 threshold = NULL, topn = NULL) {
   
   # Prepare
   df.tmp1 = df.plot %>% 
@@ -1341,7 +1394,7 @@ get_plot_explainer = function(df.plot = df.predictions, df.values = df.test_expl
     left_join(gather_(df.values, key_col = "variable", value_col = "value", 
                       gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
     mutate(variableandvalue = ifelse(variable %in% c("intercept","..... the rest"), 
-                             variable, paste0(variable," = ",round(value,2))))
+                             variable, paste0(variable," = ",value)))
   
   plots = map(df.plot[[id_name]], ~ {
     #.x = df.plot[1,"id"]

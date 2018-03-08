@@ -34,7 +34,8 @@ metric = "spearman"
 # Define test data
 df.test = df %>% filter(fold == "test")
 
-
+#
+b_sample = b_all = NA
 
 
 #######################################################################################################################-
@@ -258,58 +259,29 @@ ggsave(paste0(plotloc, "regr_partial_dependence.pdf"), marrangeGrob(plots, ncol 
 # Derive id
 df.test$id = 1:nrow(df.test)
 
-
-## Derive betas for all test cases
-
-# Value data frame
+# Subset test data (explanations are only calcualted for this subset)
 i.top = order(yhat_test, decreasing = TRUE)[1:20]
 i.bottom = order(yhat_test)[1:20]
 i.random = sample(1:length(yhat_test), 20)
 i.explain = sample(unique(c(i.top, i.bottom, i.random)))
-ids = df.test$id[i.explain]
+df.test_explain = df.test[i.explain, c("id", predictors)]
 
-# Get model matrix and DMatrix for train and test (sample) data
-m.model_train = sparse.model.matrix(formula_rightside, data = df.train[predictors])
-dm.train = xgb.DMatrix(m.model_train) 
-m.test_explain = sparse.model.matrix(formula_rightside, data = df.test[i.explain,predictors])
-dm.test_explain = xgb.DMatrix(m.test_explain)
-df.test_explain = as.data.frame(as.matrix(m.test_explain))
+# Get explanations
+df.explanations = get_explanations(type = "regr")
 
-# Create explainer data table from train data
-df.explainer = buildExplainer(fit$finalModel, dm.train, type = "regression")
-
-# Get predictions for test data
-df.predictions = explainPredictions(fit$finalModel, df.explainer, dm.test_explain)
-
-# Aggregate predictions for all nominal variables
-df.predictions = as.data.frame(df.predictions)
-df.map = data.frame(varname = predictors[attr(model.matrix(formula_rightside, data = df.train[1,predictors]), "assign")],
-                    levname = colnames(m.model_train)[-1])
-for (i in 1:length(nomi)) {
-  #i=1
-  varname = nomi[i]
-  levnames = as.character(df.map[df.map$varname == varname,]$levname)
-  df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
-  df.predictions[levnames] = NULL
-}
-
-# Check
-rowSums(df.predictions[,-1])
-yhat_test[i.explain]
 
 
 ## Plot
-df.test_explain$id = ids 
-df.predictions$id = ids  
-plots = get_plot_explainer(df.plot = df.predictions, df.values = df.test_explain, type = "regr", topn = 10, 
-                           ylim = NULL)
+df.values = df.test_explain
+df.values[metr] = map(df.values[metr], ~ round(.,2))
+plots = get_plot_explanations(df.plot = df.explanations, df.values = df.values, type = "regr", topn = 10, 
+                              ylim = NULL)
 ggsave(paste0(plotloc,"regr_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
        w = 18, h = 12)
-
-
-
 #save.image("regr_3_interpret.rdata")
 #load("regr_3_interpret.rdata")
+
+
 
 
 
