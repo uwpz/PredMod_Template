@@ -134,8 +134,8 @@ Log-Transform
 tolog = c("wage_per_hour","capital_gains","capital_losses","divdends_from_stocks")
 df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
 metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
-names(misspct) = metr #adapt misspct names
-
+miss = map_chr(miss, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .))
+names(misspct) = miss
 
 
 

@@ -34,7 +34,7 @@ summary(df.train$target)
 
 # Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
 b_all = df$target[df$fold == "train"] %>% (function(.) {summary(.)/length(.)})
-b_sample = df$target %>% (function(.) {summary(.)/length(.)})
+b_sample = df.train$target %>% (function(.) {summary(.)/length(.)})
 
 # Set metric for peformance comparison
 metric = "Mean_AUC"
@@ -287,9 +287,6 @@ df.lc = foreach(i = 1:to, .combine = bind_rows, .packages = c("caret","xgboost")
   ## Sample chunk
   set.seed(chunks_pct[i])
   i.samp = sample(1:nrow(df.train), floor(chunks_pct[i]/100 * nrow(df.train)))
-  #i.no = which(df.train$target == "N")
-  #i.yes = which(df.train$target == "Y")
-  #i.samp = c(i.no, sample(1:length(i.yes),floor(chunks_pct[i]/100 * length(i.yes))))
   print(length(i.samp))
   
   

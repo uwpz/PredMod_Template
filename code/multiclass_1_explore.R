@@ -82,33 +82,16 @@ metr_binned = setdiff(metr_binned, onebin)
 
 
 
-# Handling missings ----------------------------------------------------------------------------------------------
+
+# Missings + Outliers + Skewness --------------------------------------------------------------------------------------
 
 # Remove covariates with too many missings from metr 
 misspct = map_dbl(df[metr], ~ round(sum(is.na(.)/nrow(df)), 3)) #misssing percentage
 misspct[order(misspct, decreasing = TRUE)] #view in descending order
 (remove = names(misspct[misspct > 0.99])) 
 metr = setdiff(metr, remove)
+misspct = misspct[-which(names(misspct) %in% remove)]
 summary(df[metr]) 
-
-# Create mising indicators
-(miss = metr[map_lgl(df[metr], ~ any(is.na(.)))])
-df[paste0("MISS_",miss)] = map(df[miss], ~ as.factor(ifelse(is.na(.x), "miss", "no_miss")))
-summary(df[,paste0("MISS_",miss)])
-
-# Impute missings with randomly sampled value (or median, see below)
-df[miss] = map(df[miss], ~ {
-  i.na = which(is.na(.x))
-  .x[i.na] = sample(.x[-i.na], length(i.na) , replace = TRUE)
-  #.x[i.na] = median(.x[-i.na], na.rm = TRUE) #median imputation
-  .x }
-)
-summary(df[metr]) 
-
-
-
-
-# Outliers + Skewness --------------------------------------------------------------------------------------------
 
 # Check for outliers and skewness
 plots = get_plot_distr_metr_class(df, metr, color = fourcol, missinfo = misspct, offset = 7)
@@ -133,8 +116,7 @@ df[,metr] = map(df[metr], ~ {
 # #   #adapt binned name (to keep metr and metr_BINNED in sync)
 # #   colnames(df)[colnames(df) == paste0(varname,"_BINNED_")] = paste0(varname,"_LOG__BINNED_")
 # # }
-# names(misspct) = metr #adapt misspct names
-
+# names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .))
 
 
 
@@ -180,6 +162,25 @@ names(varimp) = metr
 plots = get_plot_distr_metr_class(df, metr, target_name = "fold_test", missinfo = misspct, varimpinfo = varimp)
 ggsave(paste0(plotloc, "multiclass_distr_metr_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        width = 18, height = 12)
+
+
+
+
+# Missing indicator and Imputation ----------------------------------------------------------------------------------
+
+# Create mising indicators
+(miss = metr[map_lgl(df[metr], ~ any(is.na(.)))])
+df[paste0("MISS_",miss)] = map(df[miss], ~ as.factor(ifelse(is.na(.x), "miss", "no_miss")))
+summary(df[,paste0("MISS_",miss)])
+
+# Impute missings with randomly sampled value (or median, see below)
+df[miss] = map(df[miss], ~ {
+  i.na = which(is.na(.x))
+  .x[i.na] = sample(.x[-i.na], length(i.na) , replace = TRUE)
+  #.x[i.na] = median(.x[-i.na], na.rm = TRUE) #median imputation
+  .x }
+)
+summary(df[metr]) 
 
 
 

@@ -233,7 +233,7 @@ get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "t
       scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
       scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
       #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")),
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
            x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
     
     # Get underlying data for max of y-value and range of x-value
@@ -281,7 +281,7 @@ get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "ta
       geom_hex() + 
       scale_fill_gradientn(colours = color) +
       geom_smooth(color = "black", level = 0.95, size = 0.5) +
-      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")),
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
            x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
     if (!is.null(ylim)) p = p + ylim(ylim)
     
@@ -378,7 +378,7 @@ get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "t
       scale_fill_manual(values = alpha(color, 0.2)) +
       scale_x_discrete(labels = paste0(df.hlp1[[.x]], " (", round(100 * df.hlp1[["perc"]], decimals), "%)")) + 
       geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
-      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", varimp[.x], ")")), 
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", varimpinfo[.x], ")")), 
            x = "", 
            y = paste0("Proportion Target")) +
       coord_flip() +
@@ -428,7 +428,7 @@ get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "ta
       coord_flip() +
       scale_x_discrete(labels = paste0(levels(df.plot[[.x]]), " (", 
                                        round(100 * table(df.plot[[.x]])/nrow(df.plot), decimals), "%)")) +
-      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimp[.x],2),")")), x = "") +
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")), x = "") +
       theme_my +
       theme(legend.position = "none") 
     if (!is.null(ylim)) p = p + ylim(ylim)

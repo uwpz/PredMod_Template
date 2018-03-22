@@ -305,7 +305,7 @@ df.lc = foreach(i = 1:to, .combine = bind_rows, .packages = c("caret","xgboost")
   i.samp = sample(1:nrow(df.train), floor(chunks_pct[i]/100 * nrow(df.train)))
   #i.no = which(df.train$target == "N")
   #i.yes = which(df.train$target == "Y")
-  #i.samp = c(i.no, sample(1:length(i.yes),floor(chunks_pct[i]/100 * length(i.yes))))
+  #i.samp = c(i.no, sample(i.yes,floor(chunks_pct[i]/100 * length(i.yes))))
   print(length(i.samp))
   
   
