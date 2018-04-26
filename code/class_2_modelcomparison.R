@@ -54,12 +54,12 @@ set.seed(999)
 l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
 ctrl_idx_fff = trainControl(method = "cv", number = 1, index = l.index, 
                             returnResamp = "final", returnData = FALSE,
-                            summaryFunction = mysummary_class, classProbs = TRUE, 
+                            summaryFunction = mysummary, classProbs = TRUE, 
                             indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
 ctrl_idx_nopar_fff = trainControl(method = "cv", number = 1, index = l.index, 
                                   returnResamp = "final", returnData = FALSE,
                                   allowParallel = FALSE, #no parallel e.g. for xgboost on big data or with DMatrix
-                                  summaryFunction = mysummary_class, classProbs = TRUE, 
+                                  summaryFunction = mysummary, classProbs = TRUE, 
                                   indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
 
 

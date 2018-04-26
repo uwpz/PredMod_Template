@@ -54,12 +54,12 @@ set.seed(999)
 l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
 ctrl_idx_fff = trainControl(method = "cv", number = 1, index = l.index, 
                             returnResamp = "final", returnData = FALSE,
-                            summaryFunction = mysummary_multiclass, classProbs = TRUE, 
+                            summaryFunction = mysummary, classProbs = TRUE, 
                             indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
 ctrl_idx_nopar_fff = trainControl(method = "cv", number = 1, index = l.index, 
                                   returnResamp = "final", returnData = FALSE,
                                   allowParallel = FALSE, #no parallel e.g. for xgboost on big data or with DMatrix
-                                  summaryFunction = mysummary_multiclass, classProbs = TRUE, 
+                                  summaryFunction = mysummary, classProbs = TRUE, 
                                   indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
 
 
@@ -318,7 +318,7 @@ df.lc = foreach(i = 1:to, .combine = bind_rows, .packages = c("caret","xgboost")
   yhat_train_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.samp,predictors])),
                                 type = "prob")
   b_sample = df$target %>% (function(.) {summary(.)/length(.)}) #new b_sample
-  yhat_train = as.data.frame((as.matrix(yhat_train_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  yhat_train = as.data.frame(t(t(as.matrix(yhat_train_unscaled)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
   
   # Test data 
   y_test = df.test$target
@@ -329,7 +329,7 @@ df.lc = foreach(i = 1:to, .combine = bind_rows, .packages = c("caret","xgboost")
   # yhat_test_unscaled = foreach(df.split = l.split, .combine = c) %dopar% {
   #   predict(fit, df.split, type = "prob")[[2]]
   # }
-  yhat_test = as.data.frame((as.matrix(yhat_test_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  yhat_test = as.data.frame(t(t(as.matrix(yhat_test_unscaled)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
   
   # Bind together
   res = rbind(cbind(data.frame("fold" = "train", "numtrainobs" = length(i.samp)), bestTune = fit$bestTune$nrounds,

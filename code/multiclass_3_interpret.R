@@ -77,7 +77,7 @@ summary(yhat_test_unscaled)
 # }
 
 # Rescale to non-undersampled data
-yhat_test = as.data.frame((as.matrix(yhat_test_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+yhat_test = as.data.frame(t(t(as.matrix(yhat_test_unscaled)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
 y_test = df.test$target
 
 # Plot performance
@@ -127,7 +127,7 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboo
               tuneGrid = tunepar)
   yhat_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,predictors])), 
                  type = "prob")
-  yhat = as.data.frame((as.matrix(yhat_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  yhat = as.data.frame(t(t(as.matrix(yhat_unscaled)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
   perf = as.numeric(mysummary_multiclass(data.frame(yhat, y = df.train$target[i.oob]))[metric])
   return(setNames(list(fit, perf), c(paste0("fit_",i), c(paste0(metric,"_",i)))))
 }
@@ -138,7 +138,7 @@ map_df(1:n.boot, ~ {
   yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], 
                           xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
                           type = "prob")
-  yhat = as.data.frame((as.matrix(yhat_unscaled) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+  yhat = as.data.frame(t(t(as.matrix(yhat_unscaled)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
   data.frame(t(mysummary_multiclass(data.frame(yhat, y = df.test$target)))) 
 })
 
@@ -160,9 +160,9 @@ fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[
                 tuneGrid = tunepar)
 
 # Plot performance
-tmp = as.data.frame((as.matrix(predict(fit_top, 
+tmp = as.data.frame(t(t(as.matrix(predict(fit_top, 
                                        xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[predictors_top])),
-                                       type = "prob")) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
+                                       type = "prob"))) * (b_all / b_sample)) %>% (function(x) x/rowSums(x)))
 plots = get_plot_performance_multiclass(tmp, y = df.test$target, reduce_factor = NULL, colors = fourcol)
 plots[1]
 

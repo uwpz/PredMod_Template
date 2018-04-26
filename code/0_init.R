@@ -209,6 +209,46 @@ mysummary_multiclass = function (data, lev = NULL, model = NULL) {
   return(stats)
 }
 
+# Custom summary function for classification performance (use by caret)
+mysummary = function(data, lev = NULL, model = NULL) 
+{
+  #browser()
+  
+  # Adapt input
+  if ("y" %in% colnames(data)) data$obs = data$y
+  if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
+                                                                               function(x) which.max(x))], 
+                                                        levels = levels(data$obs))
+  #browser()
+  if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
+  
+  # Logloss stats
+  if (is.null(lev)) lev = levels(data$obs)
+  lloss <- mnLogLoss(data = data, lev = lev, model = model)
+  
+  # AUC stats
+  prob_stats <- lapply(levels(data[, "pred"]), function(x) {
+    obs <- ifelse(data[, "obs"] == x, 1, 0)
+    prob <- data[, x]
+    AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    AUCs = max(AUCs, 1 - AUCs)
+    return(AUCs)
+  })
+  roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
+                 "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
+  
+  # confusion Matrix stats
+  CM <- confusionMatrix(data[, "pred"], data[, "obs"])
+  class_stats <- CM$byClass
+  if (!is.null(dim(class_stats))) class_stats = colMeans(class_stats)
+  names(class_stats) <- paste0("Mean_", names(class_stats))
+  
+  # Collect metrics
+  stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
+  names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+  return(stats)
+  
+}
 
 # Get plot list of metric variables vs classification target 
 get_plot_distr_metr_class = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
@@ -998,6 +1038,103 @@ get_plot_performance_regr = function(yhat, y, quantiles = seq(0.05, 0.95, 0.1),
 }
 
 
+# # Variable importance by permutation argument 
+# get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit,
+#                                      predictor_names = predictors, target_name = "target",
+#                                      vars = predictors,  metric = "auc") {
+#   
+#   if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
+#   
+#   # Original performance
+#   if (is.factor(df.for_varimp[[target_name]])) {
+#     if (!dmatrix) {
+#       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])[[2]]
+#     } else {
+#       options(na.action = "na.pass")
+#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                        data = df.for_varimp[predictor_names]))
+#       options(na.action = "na.omit")
+#       yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
+#       if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
+#     }
+#     if (length(levels(df.for_varimp[[target_name]])) == 2) {
+#       perf_orig = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
+#                                              yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
+#     } else {
+#       perf_orig = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
+#                                                   as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
+#                                                                   (function(x) x/rowSums(x)))))[metric]
+#     }
+#   } else {
+#     if (!dmatrix) {
+#       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+#     } else {
+#       options(na.action = "na.pass")
+#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                        data = df.for_varimp[predictor_names]))
+#       options(na.action = "na.omit")
+#       yhat = predict(fit.for_varimp, dm.for_varimp)
+#     }
+#     perf_orig = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
+#   }
+#   
+#   # Permute
+#   set.seed(999)
+#   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
+#   start = Sys.time()
+#   df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"), 
+#                       .export = c("mysummary_class","mysummary_multiclass","mysummary_regr",
+#                                   "prob_samp2full","b_sample", "b_all")) %dopar% 
+#   { 
+#     #i=1
+#     df.tmp = df.for_varimp
+#     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
+#     if (is.factor(df.for_varimp[[target_name]])) {
+#       if (!dmatrix) {
+#         yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]
+#       } else {
+#         options(na.action = "na.pass")
+#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                   data = df.tmp[predictor_names]))
+#         options(na.action = "na.omit")
+#         yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
+#         if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
+#       }
+#       if (length(levels(df.for_varimp[[target_name]])) == 2) {
+#         perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
+#                                           yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
+#       } else {
+#         perf = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
+#                                                as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
+#                                                                (function(x) x/rowSums(x)))))[metric]    
+#       }
+#     } else {
+#       if (!dmatrix) {
+#         yhat = predict(fit.for_varimp, df.tmp[predictor_names])
+#       } else {
+#         options(na.action = "na.pass")
+#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                   data = df.tmp[predictor_names]))
+#         options(na.action = "na.omit")
+#         yhat = predict(fit.for_varimp, dm.tmp)
+#       }        
+#       perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
+#     }
+#     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+#     
+#   }
+#   print(Sys.time() - start)
+#   
+#   # Calculate importance as scaled performance difference
+#   df.varimp = df.varimp %>% 
+#     arrange(desc(perfdiff)) %>% 
+#     mutate(importance = 100 * perfdiff/max(perfdiff),
+#            importance_cum = 100 * cumsum(perfdiff)/sum(perfdiff)) 
+#   df.varimp 
+# }
+
+
+
 # Variable importance by permutation argument 
 get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit,
                                      predictor_names = predictors, target_name = "target",
@@ -1015,16 +1152,9 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
                                                        data = df.for_varimp[predictor_names]))
       options(na.action = "na.omit")
       yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
-      if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
     }
-    if (length(levels(df.for_varimp[[target_name]])) == 2) {
-      perf_orig = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
-                                             yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
-    } else {
-      perf_orig = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
-                                                  as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
-                                                                  (function(x) x/rowSums(x)))))[metric]
-    }
+    perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], 
+                                     as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
   } else {
     if (!dmatrix) {
       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
@@ -1035,7 +1165,7 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
       options(na.action = "na.omit")
       yhat = predict(fit.for_varimp, dm.for_varimp)
     }
-    perf_orig = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
+    perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
   }
   
   # Permute
@@ -1043,31 +1173,23 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
   df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"), 
-                      .export = c("mysummary_class","mysummary_multiclass","mysummary_regr",
-                                  "prob_samp2full","b_sample", "b_all")) %dopar% 
+                      .export = c("mysummary", "b_sample", "b_all")) %dopar% 
   { 
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
     if (is.factor(df.for_varimp[[target_name]])) {
       if (!dmatrix) {
-        yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]
+        yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")
       } else {
         options(na.action = "na.pass")
         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
                                                   data = df.tmp[predictor_names]))
         options(na.action = "na.omit")
         yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
-        if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
       }
-      if (length(levels(df.for_varimp[[target_name]])) == 2) {
-        perf = mysummary_class(data.frame(y = df.for_varimp[[target_name]], 
-                                          yhat = prob_samp2full(yhat, b_sample, b_all)))[metric]
-      } else {
-        perf = mysummary_multiclass(data.frame(y = df.for_varimp[[target_name]], 
-                                               as.data.frame((as.matrix(yhat) * (b_all / b_sample)) %>% 
-                                                               (function(x) x/rowSums(x)))))[metric]    
-      }
+      perf = mysummary(data.frame(y = df.for_varimp[[target_name]], 
+                                  as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
     } else {
       if (!dmatrix) {
         yhat = predict(fit.for_varimp, df.tmp[predictor_names])
@@ -1078,10 +1200,9 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
         options(na.action = "na.omit")
         yhat = predict(fit.for_varimp, dm.tmp)
       }        
-      perf = mysummary_regr(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
+      perf = mysummary(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
     }
     data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
-    
   }
   print(Sys.time() - start)
   
@@ -1155,6 +1276,64 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 
 
 
+# # Partial dependance on green field
+# get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, 
+#                           predictor_names = predictors, target_name = "target",
+#                           vars = topn_vars, levs, quantiles) {
+#   
+#   if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
+#   
+#   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"),
+#                           .export = c("prob_samp2full","b_sample","b_all")) %dopar% 
+#   {
+#     #i=1
+#     print(vars[i])
+#     
+#     # Initialize resutl set
+#     df.res = c()
+#     
+#     # Define grid to loop over
+#     if (is.factor(df.for_partialdep[[vars[i]]])) values = levs[[vars[i]]] else values = quantiles[[vars[i]]]
+#     
+#     # Loop over levels for nominal covariables or quantiles for metric covariables
+#     df.tmp = df.for_partialdep #save original data
+#     start = Sys.time()
+#     for (value in values ) {
+#       #value = values[1]
+#       print(value)
+#       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
+#       if (is.factor(df.for_partialdep[[target_name]])) {
+#         if (!dmatrix) {
+#           yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]], b_sample, b_all)
+#         } else {
+#           yhat = prob_samp2full(predict(fit.for_partialdep, 
+#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                          data = df.tmp[predictor_names])), 
+#                          type = "prob")[[2]], b_sample, b_all)
+#         }
+#       } else {
+#         if (!dmatrix) {
+#           yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+#         } else {
+#           yhat = predict(fit.for_partialdep, 
+#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+#                                                          data = df.tmp[predictor_names])))
+#         }        
+#       }
+#       # IMPORTANT: rescale before averaging
+#       df.res = rbind(df.res, data.frame(variable = vars[i], value = as.character(value), yhat = mean(yhat), 
+#                                         stringsAsFactors = FALSE))
+#     }
+#     print(Sys.time() - start)
+#     
+#     # Return
+#     df.res
+#   }
+#   df.partialdep
+# }
+
+
+
 # Partial dependance on green field
 get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, 
                           predictor_names = predictors, target_name = "target",
@@ -1186,9 +1365,9 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
           yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]], b_sample, b_all)
         } else {
           yhat = prob_samp2full(predict(fit.for_partialdep, 
-                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                         data = df.tmp[predictor_names])), 
-                         type = "prob")[[2]], b_sample, b_all)
+                                        xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
+                                                                        data = df.tmp[predictor_names])), 
+                                        type = "prob")[[2]], b_sample, b_all)
         }
       } else {
         if (!dmatrix) {
@@ -1206,11 +1385,10 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     print(Sys.time() - start)
     
     # Return
-    df.res
+    df.res                        
   }
   df.partialdep
 }
-
 
 # Get plot list for partial dependance
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,

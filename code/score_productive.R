@@ -53,24 +53,24 @@ load(file = paste0(dataloc,"METADATA.RData"))
 # Define nominal features
 nomi = l.metadata$predictors$nomi
 
-# Duplicate variables for encoding
-toomany = names(l.metadata$nomi$encoding)
-df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ .)
-                                    
 # Make them character
 df[nomi] = map(df[nomi], ~ as.character(.))
 
 # Convert missings to own level ("(Missing)")
 df[nomi] = map(df[nomi], ~ ifelse(is.na(.), "(Missing)", .))
 
-# Map unknown content to _OTHER_
+# Create encoded variables
+toomany = names(l.metadata$nomi$encoding)
+df[paste0(toomany,"_ENCODED")] = map(toomany, ~ ifelse(df[[.]] %in% names(l.metadata$nomi$encoding[[.]]), 
+                                                       df[[.]], "_OTHER_"))
+df[paste0(toomany,"_ENCODED")] = map(toomany, ~ {l.metadata$nomi$encoding[[.]][df[[paste0(.,"_ENCODED")]]]})
+
+# Map unknown content to _OTHER_: TODO
 df[nomi] = map(nomi, ~ ifelse(df[[.]] %in% l.metadata$nomi$levels[[.]], df[[.]], "_OTHER_"))
 
 # Make them factors with same levels as for training
 df[nomi] = map(nomi, ~ factor(df[[.]], l.metadata$nomi$levels[[.]]))
 
-# Map encoding
-df[toomany] = map(toomany, ~ {l.metadata$nomi$encoding[[.]][df[[.]]]})
 
 
 
@@ -80,6 +80,8 @@ df[toomany] = map(toomany, ~ {l.metadata$nomi$encoding[[.]][df[[.]]]})
 metr = l.metadata$predictors$metr
 
 
+# Define predictors
+predictors = c(metr, nomi, paste0(toomany,"_ENCODED"))
 
 
 #######################################################################################################################-
@@ -88,9 +90,9 @@ metr = l.metadata$predictors$metr
 
 # Score and rescale ----------------------------------------------------------------------------------
 
-formula_rightside = as.formula(paste("~", paste(c(metr,nomi), collapse = " + ")))
+formula_rightside = as.formula(paste("~", paste(predictors, collapse = " + ")))
 options(na.action = "na.pass")
-dm = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df[c(metr,nomi)]))
+dm = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df[predictors]))
 options(na.action = "na.omit")
 yhat_score = prob_samp2full(predict(l.metadata$fit, dm, type="prob")[[2]], 
                             l.metadata$sample$b_sample, l.metadata$sample$b_all)

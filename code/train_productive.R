@@ -78,46 +78,45 @@ summary(df$target)
 # Define nominal features
 nomi = c("pclass","sex","sibsp","parch","deck","embarked","home.dest")
 
-# Remove variables with only 1 value
-remove = nomi[map_lgl(df[nomi], ~ length(unique(.)) <= 1)]
-nomi = setdiff(nomi, remove) 
-
 # Make them factors
 df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
 
 # Convert missings to own level ("(Missing)")
 df[nomi] = map(df[nomi], ~ fct_explicit_na(.))
 
+# Remove variables with only 1 value
+remove = nomi[map_lgl(df[nomi], ~ length(levels(.)) <= 1)]
+nomi = setdiff(nomi, remove) 
+
 # Add _OTHER_ to all nominal variables
 df[nomi] = map(df[nomi], ~ fct_expand(.,"_OTHER_"))
 
-# Save levels
-l.levels = map(df[nomi], ~ levels(.))
-
-
-
-## Create count encoding for covariates wich "too many members" 
 # Derive "toomanys"
-topn_toomany = 9
+topn_toomany = 8
 levinfo = map_int(df[nomi], ~ length(levels(.))) 
 data.frame(n = levinfo[order(levinfo, decreasing = TRUE)])
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
 (toomany = setdiff(toomany, c("xxx"))) #Set exception for important variables
 
-# Create new variables wiht just topn_toomany levels and rest in "_OTHER_"
-df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
-l.levels = c(l.levels,  map(df[paste0(toomany,"_OTHER_")], ~ levels(.)))
-nomi = c(nomi, paste0(toomany,"_OTHER_"))
-
-# Additionally encode toomany variables (by count encoding)
+# Encode toomany variables (by count encoding) TODO: Arno count encoding
 l.encoding = list()
 for (var in toomany) {
-  #var="dep_airport"
-  tmp = table(df[[var]]) %>% .[order(., decreasing = TRUE)]
-  l.encoding[[var]] = set_names(1:length(tmp), names(tmp))
-  df[var] =  l.encoding[[var]][df[[var]]]
+  #var="deck"
+  l.encoding[[var]] = table(df[[var]]) %>% .[order(., decreasing = TRUE)] %>% 
+                                          {setNames(1:length(.), names(.))}
+  df[paste0(var,"_ENCODED")] =  l.encoding[[var]][df[[var]]]
 }
-summary(df[toomany])
+summary(df[paste0(toomany,"_ENCODED")])
+
+# Overwrite toomany with just topn_toomany levels and rest in "_OTHER_"
+df[toomany] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
+
+# Create new variables with just topn_toomany levels and rest in "_OTHER_"
+df[toomany] = map(df[toomany], ~ fct_lump(fct_infreq(.), topn_toomany, other_level = "_OTHER_")) #collapse
+
+# Save levels
+l.levels = map(df[nomi], ~ levels(.))
+
 
 
 
@@ -130,6 +129,9 @@ l.metanomi = list(levels = l.levels, encoding = l.encoding)
 
 metr = c("age","fare")
 
+
+# Define predictors
+predictors = c(metr, nomi, paste0(toomany,"_ENCODED"))
 
 
 #######################################################################################################################-
@@ -177,13 +179,13 @@ skip = function() {
                                 allowParallel = FALSE, #!!! NO parallel in case of DGMatrix
                                 summaryFunction = mysummary_class, classProbs = TRUE, 
                                 indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
-  formula_rightside = as.formula(paste("~", paste(c(metr,nomi), collapse = " + ")))
+  formula_rightside = as.formula(paste("~", paste(predictors, collapse = " + ")))
   
   
   df.train$age[-c(1:1)] = NA
   
   options(na.action = "na.pass")
-  dm.train = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df.train[c(metr,nomi)]))
+  dm.train = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df.train[predictors]))
   options(na.action = "na.omit")
   fit = train(dm.train, df.train$target,              
               trControl = ctrl_index_fff, metric = "Mean_AUC", 
@@ -199,9 +201,9 @@ skip = function() {
 
 # Final Fit
 ctrl_none = trainControl(method = "none", returnData = FALSE, classProbs = TRUE)
-formula_rightside = as.formula(paste(" ~ ", paste(c(metr,nomi), collapse = " + ")))
+formula_rightside = as.formula(paste(" ~ ", paste(predictors, collapse = " + ")))
 options(na.action = "na.pass")
-dm.train = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df.train[c(metr,nomi)]))
+dm.train = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df.train[predictors]))
 options(na.action = "na.omit")
 Sys.time()
 fit = train(dm.train, df.train$target,              
