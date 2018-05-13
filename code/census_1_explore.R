@@ -15,9 +15,9 @@ source("./code/0_init.R")
 
 # Read data --------------------------------------------------------------------------------------------------------
 
-df.orig = bind_rows(cbind(read_csv(paste0("./bigdata/","census-income.data"), col_names = FALSE), fold = "train"),
-                    cbind(read_csv(paste0("./bigdata/","census-income.test"), col_names = FALSE), fold = "test"))
-tmp = read_delim(paste0("./bigdata/","census_colnames.txt"), delim = "\t", col_names = FALSE) %>% .$X1
+df.orig = bind_rows(cbind(read_csv(paste0("./data/","census-income.data"), col_names = FALSE), fold = "train"),
+                    cbind(read_csv(paste0("./data/","census-income.test"), col_names = FALSE), fold = "test"))
+tmp = read_delim(paste0("./data/","census_colnames.txt"), delim = "\t", col_names = FALSE) %>% .$X1
 names = c(setdiff(tmp, c("adjusted_gross_income","federal_income_tax_liability","total_person_earnings",
                          "total_person_income","taxable_income_amount")),
           c("year","income","fold"))
