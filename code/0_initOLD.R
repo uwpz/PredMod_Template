@@ -102,21 +102,6 @@ grid.draw.arrangelist <- function(x, ...) {
   }
 }
 
-
-# Winsorize
-winsorize = function(variable, lower = NULL, upper = NULL) {
-  if (!is.null(lower)) {
-    q_lower = quantile(variable, lower, na.rm = TRUE)
-    variable[variable < q_lower] = q_lower
-  }
-  if (!is.null(upper)) {
-    q_upper = quantile(variable, upper, na.rm = TRUE)
-    variable[variable > q_upper] = q_upper
-  }
-  variable
-}
-
-
 # Custom summary function for classification performance (use by caret)
 mysummary_class = function(data, lev = NULL, model = NULL) 
 {
@@ -224,6 +209,7 @@ mysummary_multiclass = function (data, lev = NULL, model = NULL) {
   return(stats)
 }
 
+
 # Custom summary function for classification performance (use by caret)
 mysummary = function(data, lev = NULL, model = NULL) 
 {
@@ -265,9 +251,60 @@ mysummary = function(data, lev = NULL, model = NULL)
   
 }
 
-
-
   
+# Get plot list of metric variables vs classification target 
+get_plot_distr_metr_class = function(df.plot = df, target_name = "target", vars = metr, missinfo = NULL, 
+                                     varimpinfo = NULL, nbins = 20, color = twocol, 
+                                     offset = 14, legend_only_in_1stplot = TRUE) {
+  # Get levels of target
+  levs_target = levels(df.plot[[target_name]])
+  
+  # Calculate missinfo
+  if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df.plot)), 3))
+  
+  # Loop over vars
+  plots = map(vars, ~ {
+    #.x = vars[1]
+    print(.x)
+    
+    # Start histogram plot
+    p = ggplot(data = df.plot, aes_string(x = .x)) +
+      geom_histogram(aes_string(y = "..density..", fill = target_name, color = target_name), 
+                     bins = nbins, position = "identity") +
+      geom_density(aes_string(color = target_name)) +
+      scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
+      scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
+      #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
+           x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
+    
+    # Get underlying data for max of y-value and range of x-value
+    tmp = ggplot_build(p)
+    
+    # Inner boxplot
+    p.inner = ggplot(data = df.plot, aes_string(target_name, y = .x)) +
+      geom_boxplot(aes_string(color = target_name)) +
+      stat_summary(aes_string(color = target_name), fun.y = mean, geom = "point", shape = 4) +
+      coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
+      scale_color_manual(values = color, name = target_name) +
+      theme_void() +
+      theme(legend.position = "none")
+    
+    # Put all together
+    p = p + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/offset, NA)) +
+      theme_my +
+      annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
+    }
+    p
+  })
+  plots
+}
+
+
 
 # Get plot list of metric variables vs regression target 
 get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
