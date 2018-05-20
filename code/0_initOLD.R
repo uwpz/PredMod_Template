@@ -81,24 +81,20 @@ theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
 
 
 
-
 #######################################################################################################################-
 # My Functions ----
 #######################################################################################################################-
 
-## Calculate predictions from probability of sample data and the corresponding base probabilities (classification)
-## ... possibly exponentiate for regression 
-scale_pred = function(yhat, b_sample = NULL, b_all = NULL) {
-  if (is.null(dim(yhat))) {
-    yhat
-  } else {
-    as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
-  }
+# Calculate probabilty on all data from probabilt from sample data and the corresponding (prior) base probabilities 
+prob_samp2full = function(p_sample, b_sample, b_all) {
+  p_all = b_all * ((p_sample - p_sample*b_sample) / 
+                   (b_sample - p_sample*b_sample + b_all*p_sample - b_sample*b_all))
+  p_all
 }
 
 
 
-## Workaround for ggsave and marrangeGrob not to create first page blank
+# Workaround for ggsave and marrangeGrob not to create first page blank
 grid.draw.arrangelist <- function(x, ...) {
   for (ii in seq_along(x)) {
     if (ii > 1) grid.newpage()  # skips grid.newpage() call the first time around
@@ -106,358 +102,398 @@ grid.draw.arrangelist <- function(x, ...) {
   }
 }
 
+# Custom summary function for classification performance (use by caret)
+mysummary_class = function(data, lev = NULL, model = NULL) 
+{
+  #browser()
+  
+  # Get y and yhat ("else" is default caret behavior)
+  if ("y" %in% colnames(data)) y = data$y else y = data$obs 
+  if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data[[levels(y)[[2]]]]
+
+  conf_obj = caret::confusionMatrix(factor(ifelse(yhat > 0.5,"Y","N"), levels = levels(y)), y)
+  accuracy = as.numeric(conf_obj$overall["Accuracy"])
+  missclassification = 1 - accuracy
+  
+  if (is.numeric(yhat)) { #Fix for change in caret and parallel processing
+    pred_obj = ROCR::prediction(yhat, y)
+    auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
+  } else {
+    auc = 0
+  }
+  
+  out = c("auc" = auc, "accuracy" = accuracy, "missclassification" = missclassification)
+  out
+}
 
 
-## Winsorize
-winsorize = function(variable, lower = NULL, upper = NULL) {
-  if (!is.null(lower)) {
-    q_lower = quantile(variable, lower, na.rm = TRUE)
-    variable[variable < q_lower] = q_lower
+# Custom summary function for regression performance (use by caret)
+mysummary_regr = function(data, lev = NULL, model = NULL)
+{
+  #browser()
+  concord = function(obs, pred, n=100000) {
+    i.samp1 = sample(1:length(obs), n, replace = TRUE)
+    i.samp2 = sample(1:length(obs), n, replace = TRUE)
+    obs1 = obs[i.samp1]
+    obs2 = obs[i.samp2]
+    pred1 = pred[i.samp1]
+    pred2 = pred[i.samp2]
+    sum((obs1 > obs2) * (pred1 > pred2) + (obs1 < obs2) * (pred1 < pred2) + 0.5*(obs1 == obs2)) / sum(obs1 != obs2)
   }
-  if (!is.null(upper)) {
-    q_upper = quantile(variable, upper, na.rm = TRUE)
-    variable[variable > q_upper] = q_upper
-  }
-  variable
+  
+  # Get y and yhat ("else" is default caret behavior)
+  if ("y" %in% colnames(data)) y = data$y else y = data$obs 
+  if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data$pred
+  
+  # Remove NA in target
+  i.notna = which(!is.na(yhat))
+  yhat = yhat[i.notna]
+  y = y[i.notna]
+  res = yhat - y
+  absres = abs(res) #absolute residual
+  
+  spear = cor(yhat, y, method = "spearman")
+  pear = cor(yhat, y, method = "pearson")
+  IqrE = IQR(res)
+  AUC = concord(yhat, y)
+  MAE = mean(absres)
+  MdAE = median(absres)
+  MAPE = mean(absres / abs(y))
+  MdAPE = median(absres / abs(y))
+  sMAPE = mean(2 * absres / (abs(yhat) + abs(y)))
+  sMdAPE = median(2 * absres / (abs(yhat) + abs(y)))
+  MRAE = mean(absres / abs(y - mean(y)))
+  MdRAE = median(absres / abs(y - mean(y)))
+  
+  out = c(spear, pear, IqrE, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
+  names(out) = c("spearman","pearson","IqrE","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
+  out
 }
 
 
 
-## Custom summary function for classification performance (use by caret)
+
+# Custom summary function for multiclass performance (use by caret)
+mysummary_multiclass = function (data, lev = NULL, model = NULL) {
+  
+  if ("y" %in% colnames(data)) data$obs = data$y
+  if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
+                                                                               function(x) which.max(x))], 
+                                                   levels = levels(data$obs))
+  #browser()
+  if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
+  
+  # Logloss stats
+  if (is.null(lev)) lev = levels(data$obs)
+  lloss <- mnLogLoss(data = data, lev = lev, model = model)
+  
+  # AUC stats
+  prob_stats <- lapply(levels(data[, "pred"]), function(x) {
+    obs <- ifelse(data[, "obs"] == x, 1, 0)
+    prob <- data[, x]
+    AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    AUCs = max(AUCs, 1 - AUCs)
+    return(AUCs)
+  })
+  roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
+                 "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
+  
+  # confusion Matrix stats
+  CM <- confusionMatrix(data[, "pred"], data[, "obs"])
+  class_stats <- colMeans(CM$byClass)
+  names(class_stats) <- paste0("Mean_", names(class_stats))
+  
+  # Collect metrics
+  stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
+  names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+  return(stats)
+}
+
+
+# Custom summary function for classification performance (use by caret)
 mysummary = function(data, lev = NULL, model = NULL) 
 {
   #browser()
-  # Adapt target observations
+  
+  # Adapt input
   if ("y" %in% colnames(data)) data$obs = data$y
+  if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
+                                                                               function(x) which.max(x))], 
+                                                        levels = levels(data$obs))
+  #browser()
+  if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
   
-  # Switch colnames in case of classification
-  colnames(data) = gsub("yhat.","",colnames(data))
+  # Logloss stats
+  if (is.null(lev)) lev = levels(data$obs)
+  lloss <- mnLogLoss(data = data, lev = lev, model = model)
   
-  ## Classification or Multiclass-Classifiction
-  if (is.factor(data$obs)) {
-    # Adapt prediction observations
-    if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
-                                                                                 function(x) which.max(x))], 
-                                                          levels = levels(data$obs))
-    if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
-    
-    # Logloss stats
-    if (is.null(lev)) lev = levels(data$obs)
-    lloss <- mnLogLoss(data = data, lev = lev, model = model)
-    
-    # AUC stats
-    prob_stats <- lapply(levels(data[, "pred"]), function(x) {
-      obs <- ifelse(data[, "obs"] == x, 1, 0)
-      prob <- data[, x]
-      AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
-      AUCs = max(AUCs, 1 - AUCs)
-      return(AUCs)
-    })
-    roc_stats <- c("AUC" = mean(unlist(prob_stats)), 
-                   "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
-    
-    # Confusion matrix stats
-    CM <- confusionMatrix(data[, "pred"], data[, "obs"])
-    class_stats <- CM$byClass
-    if (!is.null(dim(class_stats))) class_stats = colMeans(class_stats)
-    names(class_stats) <- paste0("Mean_", names(class_stats))
-    
-    # Collect metrics
-    stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
-    names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
-  } 
+  # AUC stats
+  prob_stats <- lapply(levels(data[, "pred"]), function(x) {
+    obs <- ifelse(data[, "obs"] == x, 1, 0)
+    prob <- data[, x]
+    AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    AUCs = max(AUCs, 1 - AUCs)
+    return(AUCs)
+  })
+  roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
+                 "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
   
+  # confusion Matrix stats
+  CM <- confusionMatrix(data[, "pred"], data[, "obs"])
+  class_stats <- CM$byClass
+  if (!is.null(dim(class_stats))) class_stats = colMeans(class_stats)
+  names(class_stats) <- paste0("Mean_", names(class_stats))
   
-  ## Regression
-  if (is.numeric(data$obs)) {
+  # Collect metrics
+  stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
+  names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+  return(stats)
+  
+}
+
+  
+# Get plot list of metric variables vs classification target 
+get_plot_distr_metr_class = function(df.plot = df, target_name = "target", vars = metr, missinfo = NULL, 
+                                     varimpinfo = NULL, nbins = 20, color = twocol, 
+                                     offset = 14, legend_only_in_1stplot = TRUE) {
+  # Get levels of target
+  levs_target = levels(df.plot[[target_name]])
+  
+  # Calculate missinfo
+  if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df.plot)), 3))
+  
+  # Loop over vars
+  plots = map(vars, ~ {
+    #.x = vars[1]
+    print(.x)
     
-    # Derive concordance
-    concord = function(obs, pred, n=100000) {
-      i.samp1 = sample(1:length(obs), n, replace = TRUE)
-      i.samp2 = sample(1:length(obs), n, replace = TRUE)
-      obs1 = obs[i.samp1]
-      obs2 = obs[i.samp2]
-      pred1 = pred[i.samp1]
-      pred2 = pred[i.samp2]
-      sum((obs1 > obs2) * (pred1 > pred2) + (obs1 < obs2) * (pred1 < pred2) + 0.5*(obs1 == obs2)) / sum(obs1 != obs2)
+    # Start histogram plot
+    p = ggplot(data = df.plot, aes_string(x = .x)) +
+      geom_histogram(aes_string(y = "..density..", fill = target_name, color = target_name), 
+                     bins = nbins, position = "identity") +
+      geom_density(aes_string(color = target_name)) +
+      scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
+      scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
+      #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
+           x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
+    
+    # Get underlying data for max of y-value and range of x-value
+    tmp = ggplot_build(p)
+    
+    # Inner boxplot
+    p.inner = ggplot(data = df.plot, aes_string(target_name, y = .x)) +
+      geom_boxplot(aes_string(color = target_name)) +
+      stat_summary(aes_string(color = target_name), fun.y = mean, geom = "point", shape = 4) +
+      coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
+      scale_color_manual(values = color, name = target_name) +
+      theme_void() +
+      theme(legend.position = "none")
+    
+    # Put all together
+    p = p + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/offset, NA)) +
+      theme_my +
+      annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
     }
-    
-    # Get y and yhat ("else" is default caret behavior)
-    y = data$obs 
-    if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data$pred
-    
-    # Remove NA in target
-    i.notna = which(!is.na(yhat))
-    yhat = yhat[i.notna]
-    y = y[i.notna]
-    res = yhat - y
-    absres = abs(res) #absolute residual
-    
-    # Derive stats
-    spear = cor(yhat, y, method = "spearman")
-    pear = cor(yhat, y, method = "pearson")
-    IqrE = IQR(res)
-    AUC = concord(yhat, y)
-    MAE = mean(absres)
-    MdAE = median(absres)
-    MAPE = mean(absres / abs(y))
-    MdAPE = median(absres / abs(y))
-    sMAPE = mean(2 * absres / (abs(yhat) + abs(y)))
-    sMdAPE = median(2 * absres / (abs(yhat) + abs(y)))
-    MRAE = mean(absres / abs(y - mean(y)))
-    MdRAE = median(absres / abs(y - mean(y)))
-    
-    # Collect metrics
-    stats = c(spear, pear, IqrE, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
-    names(stats) = c("spearman","pearson","IqrE","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
-  }
-  stats
-}
-
-
-
-## Get plot list of metric variables vs target 
-get_plot_distr_metr = function(df.plot = df, vars = metr, target_name = "target", 
-                               missinfo = NULL, varimpinfo = NULL, nbins = 50, offset = 14, ylim = NULL, 
-                               legend_only_in_1stplot = TRUE, color) {
-  ## Classification
-  if (is.factor(df.plot[[target_name]])) {
-    # Get levels of target
-    levs_target = levels(df.plot[[target_name]])
-    
-    # Calculate missinfo
-    if (is.null(missinfo)) missinfo = map_dbl(df.plot[vars], ~ round(sum(is.na(.)/nrow(df.plot)), 3))
-    
-    # Loop over vars
-    plots = map(vars, ~ {
-      #.x = vars[1]
-      print(.x)
-      
-      # Start histogram plot
-      p = ggplot(data = df.plot, aes_string(x = .x)) +
-        geom_histogram(aes_string(y = "..density..", fill = target_name, color = target_name), 
-                       bins = nbins, position = "identity") +
-        geom_density(aes_string(color = target_name)) +
-        scale_fill_manual(limits = rev(levs_target), values = alpha(rev(color), .2), name = target_name) + 
-        scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
-        #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-        labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
-             x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
-      
-      # Get underlying data for max of y-value and range of x-value
-      tmp = ggplot_build(p)
-      
-      # Inner boxplot
-      p.inner = ggplot(data = df.plot, aes_string(target_name, y = .x)) +
-        geom_boxplot(aes_string(color = target_name)) +
-        stat_summary(aes_string(color = target_name), fun.y = mean, geom = "point", shape = 4) +
-        coord_flip() +
-        scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
-        scale_color_manual(values = color, name = target_name) +
-        theme_void() +
-        theme(legend.position = "none")
-      
-      # Put all together
-      p = p + 
-        scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/offset, NA)) +
-        theme_my +
-        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
-      if (legend_only_in_1stplot == TRUE) {
-        if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
-      }
-      p
-    })
-  }
-  
-  ## Regression
-  if (is.numeric(df.plot[[target_name]])) {
-    df.plot$dummy = "dummy"
-    
-    # Loop over vars
-    plots = map(vars, ~ {
-      #.x = vars[1]
-      print(.x)
-      
-      # Scatterplot
-      p = ggplot(data = df.plot, aes_string(x = .x, y = target_name)) +
-        geom_hex() + 
-        scale_fill_gradientn(colours = color) +
-        geom_smooth(color = "black", level = 0.95, size = 0.5) +
-        labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
-             x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
-      if (!is.null(ylim)) p = p + ylim(ylim)
-      
-      # Get underlying data for max of y-value and range of x-value
-      yrange = ggplot_build(p)$layout$panel_ranges[[1]]$y.range
-      
-      # Inner Histogram
-      p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
-        geom_histogram(aes(y = ..density..), bins = nbins, position = "identity", color = "lightgrey") +
-        geom_density(color = "black") +
-        theme_void()
-      
-      # Inner Boxplot
-      p.innerinner = ggplot(data = df.plot, aes_string(x = "dummy", y = .x)) +
-        geom_boxplot() +
-        coord_flip() +
-        theme_void()
-      
-      # Put inner plots together
-      p.inner = p.inner +
-        scale_y_continuous(limits = c(-ggplot_build(p.inner)$layout$panel_ranges[[1]]$y.range[2]/2, NA)) +
-        annotation_custom(ggplotGrob(p.innerinner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
-      
-      # Put all together
-      p = p + 
-        scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-        theme(plot.title = element_text(hjust = 0.5)) + #default style here due to white spots
-        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
-      if (legend_only_in_1stplot == TRUE) {
-        if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
-      }
-      p 
-    })
-  } 
+    p
+  })
   plots
 }
 
 
 
-## Get plot list of nomial variables vs target 
-get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target", 
-                               varimpinfo = NULL, min_width = 0, inner_barplot = FALSE, ylim = NULL, decimals = 1,
-                               legend_only_in_1stplot = TRUE, color) {
-  ## Classification
-  if(is.factor(df.plot[[target_name]])) {
-    # Get levels of target
-    levs_target = levels(df.plot[[target_name]])
-    
-    # Loop over vars
-    plots = map(vars, ~ {
-      #.x = vars[1]
-      print(.x)
-      
-      # Check for multiclass
-      if (length(levels(df.plot[[target_name]])) > 2) multiclass = TRUE else multiclass = FALSE
-      
-      # Proportion nominal variable
-      df.hlp1 = df.plot %>% 
-        group_by_(.x) %>% 
-        summarise(perc = n()/nrow(df.plot))
-      
-      # Proportion target (for reference lines)
-      refs = df.plot %>% 
-        group_by_(target_name) %>% 
-        summarise(ref = n()) %>% 
-        mutate(ref = cumsum(ref)/sum(ref)) %>% 
-        .$ref
-      if (multiclass) refs = refs[-length(refs)] else refs = refs[2] - refs[1]
-      
-      # Prepare data for plotting
-      df.ggplot = suppressMessages(
-        df.plot %>% 
-          group_by_(.x, target_name) %>% 
-          summarise(prop = n()) %>% 
-          group_by_(.x) %>% 
-          mutate(prop = prop/sum(prop)) %>% 
-          left_join(df.hlp1) %>% 
-          mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
-                                   target_name)) %>%  
-          mutate(width = perc/max(.$perc)) %>%  
-          mutate(width = ifelse(width < min_width, min_width, width))
-      )
-      
-      # Just take "Y"-class in non-multiclass case
-      if (!multiclass) {
-        df.ggplot = df.ggplot %>% filter_(paste0(target_name," == 'Y'")) 
-        df.hlp1 = df.ggplot
-      }
-      
-      # Adpat color
-      if (multiclass) color = rev(color) else color = color[2]
-      
-      # Plot
-      p = ggplot(df.ggplot, aes_string(x = .x, y = "prop", fill = target_name))
-      if (multiclass) {
-        p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
-      } else{
-        p = p +geom_bar(stat = "identity", width = df.ggplot$width, color = "black") 
-      } 
-      p = p +
-        scale_fill_manual(values = alpha(color, 0.2)) +
-        scale_x_discrete(labels = paste0(df.hlp1[[.x]], " (", round(100 * df.hlp1[["perc"]], decimals), "%)")) + 
-        geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
-        labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", round(varimpinfo[.x], 2), ")")), 
-             x = "", 
-             y = paste0("Proportion Target")) +
-        coord_flip() +
-        theme_my 
-      
-      if (inner_barplot) {   
-        # Inner Barplot
-        p.inner = ggplot(data = df.ggplot, aes_string(x = .x, y = "perc")) +
-          geom_bar(stat= "identity", fill = "grey", colour = "black", width = 0.9) +
-          coord_flip() +
-          #scale_x_discrete(limits = rev(df.tmp2[[.]]), labels = rev(df.tmp2$label)) +
-          theme_void()
-        
-        # Put all together
-        p = p + 
-          scale_y_continuous(limits = c(-0.2,NA)) +
-          theme_my +
-          annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) +
-          geom_hline(yintercept = 0, size = 0.5, colour = "black", linetype = 1)
-      }
-      if (legend_only_in_1stplot == TRUE) {
-        if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
-      }
-      p
-    })
-  }
+# Get plot list of metric variables vs regression target 
+get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
+                                    varimpinfo = NULL, nbins = 50, color = hexcol, ylim = NULL, 
+                                    legend_only_in_1stplot = FALSE) {
+
+  df.plot$dummy = "dummy"
   
-  ## Regression
-  if(is.numeric(df.plot[[target_name]])) {
-    # Drop unused levels
-    df.plot = droplevels(df.plot)
+  # Loop over vars
+  plots = map(vars, ~ {
+    #.x = vars[1]
+    print(.x)
     
-    # Loop over vars
-    plots = map(vars, ~ {
-      #.x = vars[1]
-      print(.x)
-      
-      # Main Boxplot
-      p = ggplot(df.plot, aes_string(x = .x, y = target_name)) +
-        geom_boxplot(varwidth = TRUE, outlier.size = 0.5) +
-        stat_summary(aes(group = 1), fun.y = median, geom = "line", color = "black", linetype = 1) +
-        stat_summary(aes(group = 1), fun.y = mean, geom = "line", color = "red", linetype = 2) +
-        coord_flip() +
-        scale_x_discrete(labels = paste0(levels(df.plot[[.x]]), " (", 
-                                         round(100 * table(df.plot[[.x]])/nrow(df.plot), decimals), "%)")) +
-        labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")), x = "") +
-        theme_my +
-        theme(legend.position = "none") 
-      if (!is.null(ylim)) p = p + ylim(ylim)
-      
-      # Get underlying data for max of y-value and range of x-value
-      yrange = ggplot_build(p)$layout$panel_ranges[[1]]$x.range
-      
+    # Scatterplot
+    p = ggplot(data = df.plot, aes_string(x = .x, y = target_name)) +
+      geom_hex() + 
+      scale_fill_gradientn(colours = color) +
+      geom_smooth(color = "black", level = 0.95, size = 0.5) +
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")),
+           x = paste0(.x," (NA: ", missinfo[.x] * 100,"%)"))
+    if (!is.null(ylim)) p = p + ylim(ylim)
+    
+    # Get underlying data for max of y-value and range of x-value
+    yrange = ggplot_build(p)$layout$panel_ranges[[1]]$y.range
+
+    # Inner Histogram
+    p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
+      geom_histogram(aes(y = ..density..), bins = nbins, position = "identity", color = "lightgrey") +
+      geom_density(color = "black") +
+      theme_void()
+
+    # Inner Boxplot
+    p.innerinner = ggplot(data = df.plot, aes_string(x = "dummy", y = .x)) +
+      geom_boxplot() +
+      coord_flip() +
+      theme_void()
+    
+    # Put inner plots together
+    p.inner = p.inner +
+      scale_y_continuous(limits = c(-ggplot_build(p.inner)$layout$panel_ranges[[1]]$y.range[2]/2, NA)) +
+      annotation_custom(ggplotGrob(p.innerinner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+    
+    # Put all together
+    p = p + 
+      scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      theme(plot.title = element_text(hjust = 0.5)) + #default style here due to white spots
+      annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
+    }
+    p 
+  })
+  plots
+}
+
+
+# Get plot list of nomial variables vs classification target 
+get_plot_distr_nomi_class = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL, 
+                                     color = twocol, min_width = 0, inner_barplot = FALSE, decimals = 1,
+                                     legend_only_in_1stplot = TRUE) {
+  # Get levels of target
+  levs_target = levels(df.plot[[target_name]])
+  
+  # Loop over vars
+  plots = map(vars, ~ {
+    #.x = vars[1]
+    print(.x)
+
+    # Check for multiclass
+    if (length(levels(df.plot[[target_name]])) > 2) multiclass = TRUE else multiclass = FALSE
+    
+    # Proportion nominal variable
+    df.hlp1 = df.plot %>% 
+      group_by_(.x) %>% 
+      summarise(perc = n()/nrow(df.plot))
+    
+    # Proportion target (for reference lines)
+    refs = df.plot %>% 
+      group_by_(target_name) %>% 
+      summarise(ref = n()) %>% 
+      mutate(ref = cumsum(ref)/sum(ref)) %>% 
+      .$ref
+    if (multiclass) refs = refs[-length(refs)] else refs = refs[2] - refs[1]
+    
+    # Prepare data for plotting
+    df.ggplot = suppressMessages(
+      df.plot %>% 
+      group_by_(.x, target_name) %>% 
+      summarise(prop = n()) %>% 
+      group_by_(.x) %>% 
+      mutate(prop = prop/sum(prop)) %>% 
+      left_join(df.hlp1) %>% 
+      mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
+                               target_name)) %>%  
+      mutate(width = perc/max(.$perc)) %>%  
+      mutate(width = ifelse(width < min_width, min_width, width))
+    )
+
+    # Just take "Y"-class in non-multiclass case
+    if (!multiclass) df.ggplot = df.ggplot %>% filter_(paste0(target_name," == 'Y'")) 
+    
+    # Adpat color
+    if (multiclass) color = rev(color) else color = color[2]
+    
+    # Plot
+    p = ggplot(df.ggplot, aes_string(x = .x, y = "prop", fill = target_name))
+    if (multiclass) {
+      p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
+    } else{
+      p = p +geom_bar(stat = "identity", width = df.ggplot$width, color = "black") 
+    } 
+    p = p +
+      scale_fill_manual(values = alpha(color, 0.2)) +
+      scale_x_discrete(labels = paste0(df.hlp1[[.x]], " (", round(100 * df.hlp1[["perc"]], decimals), "%)")) + 
+      geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", varimpinfo[.x], ")")), 
+           x = "", 
+           y = paste0("Proportion Target")) +
+      coord_flip() +
+      theme_my 
+    
+    if (inner_barplot) {   
       # Inner Barplot
-      p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
-        geom_bar(fill = "grey", colour = "black", width = 0.9) +
+      p.inner = ggplot(data = df.hlp1, aes_string(x = .x, y = "perc")) +
+        geom_bar(stat= "identity", fill = "grey", colour = "black", width = 0.9) +
         coord_flip() +
+        #scale_x_discrete(limits = rev(df.tmp2[[.]]), labels = rev(df.tmp2$label)) +
         theme_void()
       
       # Put all together
       p = p + 
-        scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+        scale_y_continuous(limits = c(-0.2,NA)) +
         theme_my +
-        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
-      p   
-    })
-  }
+        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) +
+        geom_hline(yintercept = 0, size = 0.5, colour = "black", linetype = 1)
+    }
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
+    }
+    p
+  })
   plots
 }
+
+
+# Get plot list of nomial variables vs regression target 
+get_plot_distr_nomi_regr = function(df.plot = df, vars = nomi, target_name = "target", varimpinfo = NULL,  
+                                    ylim = NULL, decimals = 1) {
+
+  # Drop unused levels
+  df.plot = droplevels(df.plot)
   
+  # Loop over vars
+  plots = map(vars, ~ {
+    #.x = vars[1]
+    print(.x)
+    
+    # Main Boxplot
+    p = ggplot(df.plot, aes_string(x = .x, y = target_name)) +
+      geom_boxplot(varwidth = TRUE, outlier.size = 0.5) +
+      stat_summary(aes(group = 1), fun.y = median, geom = "line", color = "black", linetype = 1) +
+      stat_summary(aes(group = 1), fun.y = mean, geom = "line", color = "darkgrey", linetype = 2) +
+      coord_flip() +
+      scale_x_discrete(labels = paste0(levels(df.plot[[.x]]), " (", 
+                                       round(100 * table(df.plot[[.x]])/nrow(df.plot), decimals), "%)")) +
+      labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI: ", round(varimpinfo[.x],2),")")), x = "") +
+      theme_my +
+      theme(legend.position = "none") 
+    if (!is.null(ylim)) p = p + ylim(ylim)
+    
+    # Get underlying data for max of y-value and range of x-value
+    yrange = ggplot_build(p)$layout$panel_ranges[[1]]$x.range
+    
+    # Inner Barplot
+    p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
+      geom_bar(fill = "grey", colour = "black", width = 0.9) +
+      coord_flip() +
+      theme_void()
+    
+    # Put all together
+    p = p + 
+      scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      theme_my +
+      annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
+    p   
+  })
+  plots
+}
+
 
 # Get plot list of correlations of variables
 get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutoff = 0, textcol = "white",
@@ -532,609 +568,476 @@ get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutof
 }
 
 
-# # Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-# get_plot_performance_class = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
-#                                       color = "blue", colors = twocol) {
-#   
-#   ## Prepare "direct" information (confusion, distribution, calibration)
-#   conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
-#   df.confu = as.data.frame(conf_obj$table)
-#   df.distr = data.frame(y = y, yhat = yhat)
-#   df.calib = calibration(y~yhat, data.frame(y = y, yhat = 1 - yhat), cuts = quantile(yhat, quantiles))$data
-# 
-#   
-#   
-#   ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
-#   # Create performance objects
-#   pred_obj = prediction(yhat, y)
-#   auc = performance(pred_obj, "auc" )@y.values[[1]]
-#   tprfpr = performance( pred_obj, "tpr", "fpr")
-#   precrec = performance( pred_obj, "ppv", "rec")
-#   help_gain = ifelse(y == "Y", 1, 0)[order(yhat, decreasing = TRUE)] 
-#   df.gainlift = data.frame("x" = 100*(1:length(yhat))/length(yhat),
-#                            "gain" = 100*cumsum(help_gain)/sum(help_gain)) %>% 
-#     mutate(lift = gain / x)
-#   
-#   # Thin out reducable objects (for big test data as this reduces plot size)
-#   if (!is.null(reduce_factor)) {
-#     set.seed(123)
-#     i.reduce = sample(1:length(yhat), floor(reduce_factor * length(yhat)))
-#     i.reduce = i.reduce[order(i.reduce)]
-#     for (type in c("x.values","y.values","alpha.values")) {
-#       slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
-#       slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
-#     }
-#     df.gainlift = df.gainlift[i.reduce,]
-#   } 
-#   
-#   # Collect information of reduced information into data frames
-#   df.roc = data.frame("fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]])
-#   i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .))) #cutoff values
-#   df.precrec = data.frame("rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
-#                           x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
-#   df.precrec[is.nan(df.precrec$prec),"prec"] = 1 #adapt first value
-#   
-# 
-#   
-#   ## Plots
-#   # ROC
-#   p_roc = ggplot(df.roc, aes(x = fpr, y = tpr)) +
-#     geom_line(color = "blue", size = .5) +
-#     geom_abline(intercept = 0, slope = 1, color = "grey") + 
-#     geom_point(aes(fpr, tpr), data = df.roc[i.alpha,], color = "red", size = 0.8) +
-#     scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
-#     scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
-#     labs(title = paste0("ROC (auc=", round(auc,3), ")"), 
-#          x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
-#          y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
-#     theme_my 
-#   
-#   # Condusion Matrix
-#   p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
-#     geom_tile(aes(fill = Freq)) + 
-#     geom_text(aes(label = Freq)) +
-#     scale_fill_gradient(low = "white", high = "blue") +
-#     scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
-#     labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
-#     theme_my 
-#   
-#   # Stratified distribution of predictions (plot similar to plot_distr_metr)
-#   p_distr = ggplot(data = df.distr, aes(x = yhat)) +
-#     geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
-#     geom_density(aes(color = y)) +
-#     scale_fill_manual(values = alpha(colors, .2), name = "Target (y)") + 
-#     scale_color_manual(values = colors, name = "Target (y)") +
-#     labs(title = "Predictions", 
-#          x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
-#     guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-#   tmp = ggplot_build(p_distr)
-#   p.inner = ggplot(data = df.distr, aes_string("y", "yhat")) +
-#     geom_boxplot(aes_string(color = "y")) +
-#     coord_flip() +
-#     scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
-#     scale_color_manual(values = colors, name = "Target") +
-#     theme_void() +
-#     theme(legend.position = "none")
-#   p_distr = p_distr + 
-#     scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
-#     theme_my +
-#     annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
-#   
-#   # Gain + Lift
-#   p_gain = ggplot(df.gainlift) +
-#     geom_polygon(aes(x, y), data.frame(x = c(0,100,100*sum(help_gain)/length(help_gain)), y = c(0,100,100)), 
-#                  fill = "grey90", alpha = 0.5) +
-#     geom_line(aes(x, gain), df.gainlift, color = "blue", size = .5) +
-#     scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
-#     labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
-#     theme_my 
-#   p_lift = ggplot(df.gainlift) +
-#     geom_line(aes(x, lift), color = "blue", size = .5) +
-#     scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
-#     labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
-#     theme_my 
-#   
-#   # Calibrate
-#   p_calib = ggplot(df.calib, aes(midpoint, Percent)) +
-#     geom_line(color = "blue") +
-#     geom_point(color = "blue") +  
-#     geom_abline(intercept = 0, slope = 1, color = "grey") + 
-#     scale_x_continuous(limits = c(0,100), breaks = seq(10,90,20)) + 
-#     scale_y_continuous(limits = c(0,100), breaks = seq(0,100,10)) +
-#     labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
-#     theme_my 
-#   
-#   # Precision Recall
-#   p_precrec = ggplot(df.precrec, aes(rec, prec)) +
-#     geom_line(color = "blue", size = .5) +
-#     geom_point(aes(x = ), df.precrec[i.alpha,], color = "red", size = 0.8) +
-#     scale_x_continuous(breaks = seq(0,1,0.1)) +
-#     labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
-#          y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
-#     theme_my 
-#   
-#   # Precision
-#   p_prec = ggplot(df.precrec, aes(x, prec)) +
-#     geom_line(color = "blue", size = .5) +
-#     geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
-#     scale_x_continuous(breaks = seq(0,100,10)) +
-#     labs(title = "Precision", x = "% Samples Tested",
-#          y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
-#     theme_my
-#   
-#   
-#   
-#   ## Collect Plots and return
-#   plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
-#                p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
-#   plots
-# }
-
-
 # Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
-                                colors = twocol, gradcol = hexcol, color = "blue",
-                                ylim = NULL) {
+get_plot_performance_class = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
+                                      color = "blue", colors = twocol) {
   
-  ## Classification
-  if (is.factor(y)) {
-    # Derive predicted class
-    pred = factor(colnames(yhat)[apply(yhat, 1, which.max)], levels = colnames(yhat))
-    
-    ## Prepare "direct" information (confusion, distribution, calibration)
-    conf_obj = confusionMatrix(pred, y)
-    df.confu = as.data.frame(conf_obj$table)
-    df.distr_all = c()
-    df.calib_all = c()
-    for (i in 1:length(levels(y))) {
-      #i=1
-      lev = levels(y)[i]
-      
-      # Prepare
-      df.distr = data.frame(target = factor(lev, levels = levels(y)), 
-                            y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
-      
-      df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), 
-                             cuts = quantile(df.distr$yhat, quantiles))$data
-      df.calib$target = factor(lev, levels = levels(y))
-      
-      # Collect
-      df.distr_all = bind_rows(df.distr_all, df.distr)
-      df.calib_all = bind_rows(df.calib_all, df.calib)
-    }
-    
-    
-    
-    ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
-    df.roc_all = c()
-    df.precrec_all = c()
-    df.gainlift_all = c()
-    df.auc_all = c()
-    for (i in 1:length(levels(y))) {
-      #i=1
-      lev = levels(y)[i]
-      
-      # Subset on level
-      df.tmp = data.frame(target = factor(lev, levels = levels(y)), 
-                          y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
-      
-      # Create performance objects
-      pred_obj = prediction(df.tmp$yhat, df.tmp$y)
-      df.auc = data.frame(target = factor(lev, levels = levels(y)),
-                          auc = performance(pred_obj, "auc" )@y.values[[1]])
-      tprfpr = performance( pred_obj, "tpr", "fpr")
-      precrec = performance( pred_obj, "ppv", "rec")
-      tmp = ifelse(df.tmp$y == "Y", 1, 0)[order(df.tmp$yhat, decreasing = TRUE)] 
-      df.gainlift = data.frame(target = factor(lev, levels = levels(y)),
-                               "x" = 100*(1:length(df.tmp$yhat))/length(df.tmp$yhat),
-                               "gain" = 100*cumsum(tmp)/sum(tmp))
-      df.gainlift$lift = df.gainlift$gain/df.gainlift$x 
-      
-      # Thin out reducable objects (for big test data as this reduces plot size)
-      if (!is.null(reduce_factor)) {
-        set.seed(123)
-        i.reduce = sample(1:nrow(df.tmp), floor(reduce_factor * nrow(df.tmp)))
-        i.reduce = i.reduce[order(i.reduce)]
-        for (type in c("x.values","y.values","alpha.values")) {
-          slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
-          slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
-        }
-        df.gainlift = df.gainlift[i.reduce,]
-      } 
-      
-      # Collect information of reduced information into data frames
-      df.roc = data.frame(target = factor(lev, levels = levels(y)),
-                          "fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]],
-                          "fpr_alpha" = NA, "tpr_alpha" = NA)
-      i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .)))
-      df.roc[i.alpha,"fpr_alpha"] = df.roc[i.alpha,"fpr"]
-      df.roc[i.alpha,"tpr_alpha"] = df.roc[i.alpha,"tpr"]
-      
-      df.precrec = data.frame(target = factor(lev, levels = levels(y)),
-                              "rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
-                              x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
-      df.precrec[is.nan(df.precrec$prec),"prec"] = 1
-      df.precrec[i.alpha,"rec_alpha"] = df.precrec[i.alpha,"rec"]
-      df.precrec[i.alpha,"prec_alpha"] = df.precrec[i.alpha,"prec"]
-      df.precrec[i.alpha,"x_alpha"] = df.precrec[i.alpha,"x"]
-      
-      # Collect
-      df.roc_all = bind_rows(df.roc_all, df.roc)
-      df.auc_all = bind_rows(df.auc_all, df.auc)
-      df.precrec_all = bind_rows(df.precrec_all, df.precrec)
-      df.gainlift_all = bind_rows(df.gainlift_all, df.gainlift)
-    }
-    
-    df.tmp = data.frame(100 * table(y)/length(y))
-    colnames(df.tmp) = c("target", "x")
-    df.tmp$y = 100
-    df.gainlift_help = bind_rows(df.tmp, data.frame(target = df.tmp$target, x = 0, y = 0),
-                                 data.frame(target = df.tmp$target, x = 100, y = 100)) %>% arrange(x)
-    
-    
-    ## Plots
-    # ROC
-    p_roc = ggplot(df.roc_all, aes(x = fpr, y = tpr)) +
-      geom_line(aes(color = target), size = .5) +
-      geom_abline(intercept = 0, slope = 1, color = "grey") + 
-      geom_point(aes(x = fpr_alpha, y = tpr_alpha, color = target), 
-                 data = df.roc_all[!is.na(df.roc_all$fpr_alpha),], size = 3, shape = "x") +
-      scale_color_manual(values = colors, 
-                         labels = paste0(levels(df.roc_all$target)," (",round(df.auc_all$auc,3),")"), name = "Target (AUC)") +
-      scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
-      scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
-      labs(title = paste0("ROC (mean(AUC)=", round(mean(df.auc_all$auc),3), ")"), x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
-           y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
-      #geom_label(data = data.frame(x = 0.9, y = 0.1, text = paste0("AUC: ",round(auc,3))), aes(x = x, y = y, label = text)) +
-      #geom_label(aes(x, y, label = text), data.frame(x=0.7, y=0.3, text = lev), size = 7) +
-      theme_my +
-      theme(legend.position = c(0.75,0.5), legend.background = element_rect(color = "black"))
-    
-    # Condusion Matrix
-    p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
-      geom_tile(aes(fill = Freq)) + 
-      geom_text(aes(label = Freq)) +
-      scale_fill_gradient(low = "white", high = "blue") +
-      scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
-      labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
-      theme_my 
-    
-    # Stratified distribution of predictions (plot similar to plot_distr_metr)
-    p_distr = ggplot(data = df.distr_all, aes_string("yhat")) +
-      geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
-      geom_density(aes(color = y)) +
-      scale_fill_manual(values = alpha(c("blue","red"), .2), name = "Target (y)") + 
-      scale_color_manual(values = c("blue","red"), name = "Target (y)") +
-      labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
-      guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
-      facet_wrap("target", scales = "free")
-    
-    # Gain + Lift
-    p_gain = ggplot(df.gainlift_all) +
-      # geom_polygon(aes(x, y, color = target), data.frame(x = c(0,100,100*sum(tmp)/length(tmp)), y = c(0,100,100)), 
-      #              fill = "grey90", alpha = 0.5) +
-      geom_line(aes(x, gain, color = target), size = .5) +
-      geom_line(aes(x, y, color = target), df.gainlift_help, size = .5, linetype = 2) +
-      scale_color_manual(values = colors, name = "Target (y)") +
-      scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
-      labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
-      theme_my +
-      theme(legend.position = "none")
-    p_lift = ggplot(df.gainlift_all) +
-      geom_line(aes(x, lift, color = target), size = .5) +
-      scale_color_manual(values = colors, name = "Target (y)") +
-      scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
-      labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
-      theme_my +
-      theme(legend.position = "none") +
-      facet_wrap("target", scales = "free_y")
-    
-    # Calibrate
-    p_calib = ggplot(df.calib_all, aes(midpoint, Percent)) +
-      geom_line(aes(color = target)) +
-      geom_point(aes(color = target)) +  
-      scale_color_manual(values = colors, name = "Target (y)") +
-      geom_abline(intercept = 0, slope = 1, color = "grey") + 
-      scale_x_continuous(limits = c(0,100), breaks = seq(10,90,20)) + 
-      scale_y_continuous(limits = c(0,100), breaks = seq(0,100,10)) +
-      labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
-      theme_my +
-      theme(legend.position = "none")
-    
-    # Precision Recall
-    p_precrec = ggplot(df.precrec_all, aes(rec, prec)) +
-      geom_line(aes(color = target), size = .5) +
-      #geom_point(aes(color = target), df.precrec[i.alpha,], color = "red", size = 0.8) +
-      geom_point(aes(x = rec_alpha, y = prec_alpha, color = target), 
-                 data = df.precrec_all[!is.na(df.precrec_all$rec_alpha),], size = 3, shape = "x") +
-      scale_color_manual(values = colors, name = "Target (y)") +
-      scale_x_continuous(breaks = seq(0,1,0.1)) +
-      labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
-           y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
-      theme_my +
-      theme(legend.position = "none")
-    
-    # Precision
-    p_prec = ggplot(df.precrec_all, aes(x, prec)) +
-      geom_line(aes(color = target), size = .5) +
-      #geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
-      geom_point(aes(x = x_alpha, y = prec_alpha, color = target), 
-                 data = df.precrec_all[!is.na(df.precrec_all$x_alpha),], size = 3, shape = "x") +
-      scale_color_manual(values = colors, name = "Target (y)") +
-      scale_x_continuous(breaks = seq(0,100,10)) +
-      labs(title = "Precision", x = "% Samples Tested",
-           y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
-      theme_my +
-      theme(legend.position = "none")
-    
-    
-    # Plot
-    plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
-                 p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
-  }
+  ## Prepare "direct" information (confusion, distribution, calibration)
+  conf_obj = confusionMatrix(ifelse(yhat > 0.5,"Y","N"), y)
+  df.confu = as.data.frame(conf_obj$table)
+  df.distr = data.frame(y = y, yhat = yhat)
+  df.calib = calibration(y~yhat, data.frame(y = y, yhat = 1 - yhat), cuts = quantile(yhat, quantiles))$data
+
   
-  ## Regression
-  if (is.numeric(y)) {
-    ## Prepare
-    pred_obj = mysummary_regr(data.frame(y = y, yhat = yhat))
-    spearman = round(pred_obj["spearman"], 2)
-    df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, absres = abs(y - yhat), rel_absres = abs(y - yhat) / abs(y),
-                         midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
-    df.distr = data.frame(type = c(rep("y", length(y)), rep("yhat", length(y))),
-                          value = c(y, yhat))
-    df.calib = df.perf %>% group_by(midpoint) %>% summarise(y = mean(y), yhat = mean(yhat))
-    
-    
-    ## Performance plot
-    p_perf = ggplot(data = df.perf, aes_string("yhat", "y")) +
-      geom_hex() + 
-      scale_fill_gradientn(colors = gradcol, name = "count") +
-      geom_smooth(color = "black", level = 0.95, size = 0.5) +
-      geom_abline(intercept = 0, slope = 1, color = "grey") + 
-      labs(title = bquote(paste("Observed vs. Fitted (", rho[spearman], " = ", .(spearman), ")", sep = "")),
-           x = expression(hat(y))) +
-      theme(plot.title = element_text(hjust = 0.5))
-    if (length(ylim)) p_perf = p_perf + xlim(ylim) + ylim(ylim)
-    
-    
-    ## Distribution of predictions and target (plot similar to plot_distr_metr)
-    p_distr = ggplot(data = df.distr, aes_string("value")) +
-      geom_histogram(aes(y = ..density.., fill = type), bins = 40, position = "identity") +
-      geom_density(aes(color = type)) +
-      scale_fill_manual(values = alpha(colors, .2), labels = c("y", expression(paste(hat(y)))), name = " ") + 
-      scale_color_manual(values = colors, labels = c("y", expression(paste(hat(y)))), name = " ") +
-      labs(title = "Distribution", x = " ") +
-      guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-    if (length(ylim)) p_distr = p_distr + xlim(ylim)
-    tmp = ggplot_build(p_distr)
-    p.inner = ggplot(data = df.distr, aes_string("type", "value")) +
-      geom_boxplot(aes_string(color = "type")) +
-      coord_flip() +
-      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
-      scale_color_manual(values = colors, name = " ") +
-      theme_void() +
-      theme(legend.position = "none")
-    if (length(ylim)) p.inner = p.inner + ylim(ylim)
-    p_distr = p_distr + 
-      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
-      theme_my +
-      annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
-    
-    
-    
-    ## Calibration
-    p_calib = ggplot(df.calib, aes(yhat, y)) +
-      geom_line(color = "black") +
-      geom_point(color = "black") +  
-      xlim(range(c(df.calib$y,df.calib$yhat))) +
-      ylim(range(c(df.calib$y,df.calib$yhat))) +
-      geom_abline(intercept = 0, slope = 1, color = "grey") + 
-      labs(title = "Calibration", x = "Prediction Average (in quantile bin)", y = "Observation Average") +
-      theme_my 
-    
-    
-    ## Two sided scatter: used for Residual plots
-    res_plot = function(df.plot = df.perf, x = "yhat", y = "res", title = "Residuals vs. Fitted", 
-                        xlab = expression(hat(y)), ylab = expression(paste(hat(y) - y))) {
-      
-      
-      p_res = ggplot(data = df.plot, aes_string(x, y)) +
-        geom_hex() + 
-        scale_fill_gradientn(colors = gradcol, name = "count") +
-        geom_smooth(color = "black", level = 0.95, size = 0.5) +
-        labs(title = title, x = xlab, y = ylab) +
-        theme(plot.title = element_text(hjust = 0.5))
-      if (length(ylim)) p_res = p_res + xlim(ylim)
-      tmp = ggplot_build(p_res)
-      xrange = tmp$layout$panel_ranges[[1]]$x.range
-      yrange = tmp$layout$panel_ranges[[1]]$y.range
-      p.inner_x = ggplot(data = df.plot, aes_string(x = x)) +
-        geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-        scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-        geom_density(color = "black") +
-        theme_void()
-      tmp = ggplot_build(p.inner_x)
-      p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = x)) +
-        geom_boxplot(color = "black") +
-        coord_flip() +
-        scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-        theme_void()
-      p.inner_x = p.inner_x + 
-        scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
-        theme_void() +
-        annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-                          ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
-      
-      p.inner_y = ggplot(data = df.plot, aes_string(x = y)) +
-        geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-        scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-        geom_density(color = "black") +
-        coord_flip() +
-        theme_void()
-      tmp = ggplot_build(p.inner_y)
-      p.inner_y_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
-        geom_boxplot(color = "black") +
-        #coord_flip() +
-        scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-        theme_void()
-      p.inner_y = p.inner_y + 
-        scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
-        theme_void() +
-        annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-                          ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
-      
-      p_res + 
-        scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-        scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-        theme(plot.title = element_text(hjust = 0.5)) +
-        annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
-        annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
-    }
-    
-    p_res = res_plot()
-    p_absres = res_plot(y = "absres", title = "absolute Residuals vs. Fitted", 
-                        ylab = expression(paste("|",hat(y) - y,"|")))
-    p_rel_absres = res_plot(y = "rel_absres", title = "rel. absolute Residuals vs. Fitted", 
-                            ylab = expression(paste("|",hat(y) - y,"| / |y|")))
-    
-    # Plot
-    plots = list(p_perf, p_calib, p_distr, p_res, p_absres, p_rel_absres)
-  }
   
+  ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
+  # Create performance objects
+  pred_obj = prediction(yhat, y)
+  auc = performance(pred_obj, "auc" )@y.values[[1]]
+  tprfpr = performance( pred_obj, "tpr", "fpr")
+  precrec = performance( pred_obj, "ppv", "rec")
+  help_gain = ifelse(y == "Y", 1, 0)[order(yhat, decreasing = TRUE)] 
+  df.gainlift = data.frame("x" = 100*(1:length(yhat))/length(yhat),
+                           "gain" = 100*cumsum(help_gain)/sum(help_gain)) %>% 
+    mutate(lift = gain / x)
+  
+  # Thin out reducable objects (for big test data as this reduces plot size)
+  if (!is.null(reduce_factor)) {
+    set.seed(123)
+    i.reduce = sample(1:length(yhat), floor(reduce_factor * length(yhat)))
+    i.reduce = i.reduce[order(i.reduce)]
+    for (type in c("x.values","y.values","alpha.values")) {
+      slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
+      slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
+    }
+    df.gainlift = df.gainlift[i.reduce,]
+  } 
+  
+  # Collect information of reduced information into data frames
+  df.roc = data.frame("fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]])
+  i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .))) #cutoff values
+  df.precrec = data.frame("rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
+                          x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
+  df.precrec[is.nan(df.precrec$prec),"prec"] = 1 #adapt first value
+  
+
+  
+  ## Plots
+  # ROC
+  p_roc = ggplot(df.roc, aes(x = fpr, y = tpr)) +
+    geom_line(color = "blue", size = .5) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    geom_point(aes(fpr, tpr), data = df.roc[i.alpha,], color = "red", size = 0.8) +
+    scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
+    scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
+    labs(title = paste0("ROC (auc=", round(auc,3), ")"), 
+         x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
+         y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
+    theme_my 
+  
+  # Condusion Matrix
+  p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
+    geom_tile(aes(fill = Freq)) + 
+    geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low = "white", high = "blue") +
+    scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
+    labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
+    theme_my 
+  
+  # Stratified distribution of predictions (plot similar to plot_distr_metr)
+  p_distr = ggplot(data = df.distr, aes(x = yhat)) +
+    geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
+    geom_density(aes(color = y)) +
+    scale_fill_manual(values = alpha(colors, .2), name = "Target (y)") + 
+    scale_color_manual(values = colors, name = "Target (y)") +
+    labs(title = "Predictions", 
+         x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
+    guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+  tmp = ggplot_build(p_distr)
+  p.inner = ggplot(data = df.distr, aes_string("y", "yhat")) +
+    geom_boxplot(aes_string(color = "y")) +
+    coord_flip() +
+    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
+    scale_color_manual(values = colors, name = "Target") +
+    theme_void() +
+    theme(legend.position = "none")
+  p_distr = p_distr + 
+    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
+    theme_my +
+    annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+  
+  # Gain + Lift
+  p_gain = ggplot(df.gainlift) +
+    geom_polygon(aes(x, y), data.frame(x = c(0,100,100*sum(help_gain)/length(help_gain)), y = c(0,100,100)), 
+                 fill = "grey90", alpha = 0.5) +
+    geom_line(aes(x, gain), df.gainlift, color = "blue", size = .5) +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
+    theme_my 
+  p_lift = ggplot(df.gainlift) +
+    geom_line(aes(x, lift), color = "blue", size = .5) +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
+    theme_my 
+  
+  # Calibrate
+  p_calib = ggplot(df.calib, aes(midpoint, Percent)) +
+    geom_line(color = "blue") +
+    geom_point(color = "blue") +  
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    scale_x_continuous(limits = c(0,100), breaks = seq(10,90,20)) + 
+    scale_y_continuous(limits = c(0,100), breaks = seq(0,100,10)) +
+    labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
+    theme_my 
+  
+  # Precision Recall
+  p_precrec = ggplot(df.precrec, aes(rec, prec)) +
+    geom_line(color = "blue", size = .5) +
+    geom_point(aes(x = ), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    scale_x_continuous(breaks = seq(0,1,0.1)) +
+    labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my 
+  
+  # Precision
+  p_prec = ggplot(df.precrec, aes(x, prec)) +
+    geom_line(color = "blue", size = .5) +
+    geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    scale_x_continuous(breaks = seq(0,100,10)) +
+    labs(title = "Precision", x = "% Samples Tested",
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my
+  
+  
+  
+  ## Collect Plots and return
+  plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
+               p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
   plots
 }
 
 
-# # Get plot list for Observed vs. Fitted, Residuals, Calibration, Distribution
-# get_plot_performance_regr = function(yhat, y, quantiles = seq(0.05, 0.95, 0.1), 
-#                                      colors = twocol, gradcol = hexcol, ylim = NULL) {
-#   
-#   ## Prepare
-#   pred_obj = mysummary_regr(data.frame(y = y, yhat = yhat))
-#   spearman = round(pred_obj["spearman"], 2)
-#   df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, absres = abs(y - yhat), rel_absres = abs(y - yhat) / abs(y),
-#                        midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
-#   df.distr = data.frame(type = c(rep("y", length(y)), rep("yhat", length(y))),
-#                         value = c(y, yhat))
-#   df.calib = df.perf %>% group_by(midpoint) %>% summarise(y = mean(y), yhat = mean(yhat))
-#   
-#   
-#   ## Performance plot
-#   p_perf = ggplot(data = df.perf, aes_string("yhat", "y")) +
-#     geom_hex() + 
-#     scale_fill_gradientn(colors = gradcol, name = "count") +
-#     geom_smooth(color = "black", level = 0.95, size = 0.5) +
-#     geom_abline(intercept = 0, slope = 1, color = "grey") + 
-#     labs(title = bquote(paste("Observed vs. Fitted (", rho[spearman], " = ", .(spearman), ")", sep = "")),
-#          x = expression(hat(y))) +
-#     theme(plot.title = element_text(hjust = 0.5))
-#   if (length(ylim)) p_perf = p_perf + xlim(ylim) + ylim(ylim)
-#   
-#   
-#   ## Distribution of predictions and target (plot similar to plot_distr_metr)
-#   p_distr = ggplot(data = df.distr, aes_string("value")) +
-#     geom_histogram(aes(y = ..density.., fill = type), bins = 40, position = "identity") +
-#     geom_density(aes(color = type)) +
-#     scale_fill_manual(values = alpha(colors, .2), labels = c("y", expression(paste(hat(y)))), name = " ") + 
-#     scale_color_manual(values = colors, labels = c("y", expression(paste(hat(y)))), name = " ") +
-#     labs(title = "Distribution", x = " ") +
-#     guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
-#   if (length(ylim)) p_distr = p_distr + xlim(ylim)
-#   tmp = ggplot_build(p_distr)
-#   p.inner = ggplot(data = df.distr, aes_string("type", "value")) +
-#     geom_boxplot(aes_string(color = "type")) +
-#     coord_flip() +
-#     scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
-#     scale_color_manual(values = colors, name = " ") +
-#     theme_void() +
-#     theme(legend.position = "none")
-#   if (length(ylim)) p.inner = p.inner + ylim(ylim)
-#   p_distr = p_distr + 
-#     scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
-#     theme_my +
-#     annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
-#   
-#   
-#   
-#   ## Calibration
-#   p_calib = ggplot(df.calib, aes(yhat, y)) +
-#     geom_line(color = "black") +
-#     geom_point(color = "black") +  
-#     xlim(range(c(df.calib$y,df.calib$yhat))) +
-#     ylim(range(c(df.calib$y,df.calib$yhat))) +
-#     geom_abline(intercept = 0, slope = 1, color = "grey") + 
-#     labs(title = "Calibration", x = "Prediction Average (in quantile bin)", y = "Observation Average") +
-#     theme_my 
-#   
-#   
-#   ## Two sided scatter: used for Residual plots
-#   res_plot = function(df.plot = df.perf, x = "yhat", y = "res", title = "Residuals vs. Fitted", 
-#                       xlab = expression(hat(y)), ylab = expression(paste(hat(y) - y))) {
-#     
-#     
-#     p_res = ggplot(data = df.plot, aes_string(x, y)) +
-#       geom_hex() + 
-#       scale_fill_gradientn(colors = gradcol, name = "count") +
-#       geom_smooth(color = "black", level = 0.95, size = 0.5) +
-#       labs(title = title, x = xlab, y = ylab) +
-#       theme(plot.title = element_text(hjust = 0.5))
-#     if (length(ylim)) p_res = p_res + xlim(ylim)
-#     tmp = ggplot_build(p_res)
-#     xrange = tmp$layout$panel_ranges[[1]]$x.range
-#     yrange = tmp$layout$panel_ranges[[1]]$y.range
-#     p.inner_x = ggplot(data = df.plot, aes_string(x = x)) +
-#       geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-#       scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-#       geom_density(color = "black") +
-#       theme_void()
-#     tmp = ggplot_build(p.inner_x)
-#     p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = x)) +
-#       geom_boxplot(color = "black") +
-#       coord_flip() +
-#       scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-#       theme_void()
-#     p.inner_x = p.inner_x + 
-#       scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
-#       theme_void() +
-#       annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-#                         ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
-#     
-#     p.inner_y = ggplot(data = df.plot, aes_string(x = y)) +
-#       geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
-#       scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-#       geom_density(color = "black") +
-#       coord_flip() +
-#       theme_void()
-#     tmp = ggplot_build(p.inner_y)
-#     p.inner_y_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
-#       geom_boxplot(color = "black") +
-#       #coord_flip() +
-#       scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
-#       theme_void()
-#     p.inner_y = p.inner_y + 
-#       scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
-#       theme_void() +
-#       annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
-#                         ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
-#     
-#     p_res + 
-#       scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-#       scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
-#       theme(plot.title = element_text(hjust = 0.5)) +
-#       annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
-#       annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
-#   }
-#   
-#   p_res = res_plot()
-#   p_absres = res_plot(y = "absres", title = "absolute Residuals vs. Fitted", 
-#                       ylab = expression(paste("|",hat(y) - y,"|")))
-#   p_rel_absres = res_plot(y = "rel_absres", title = "rel. absolute Residuals vs. Fitted", 
-#                           ylab = expression(paste("|",hat(y) - y,"| / |y|")))
-#   
-#   # Plot
-#   plots = list(p_perf, p_calib, p_distr, p_res, p_absres, p_rel_absres)
-#   plots
-# }
+# Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
+get_plot_performance_multiclass = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
+                                           color = "blue", colors = sevencol) {
+  
+  # Derive predicted class
+  pred = factor(colnames(yhat)[apply(yhat, 1, which.max)], levels = colnames(yhat))
+  
+  ## Prepare "direct" information (confusion, distribution, calibration)
+  conf_obj = confusionMatrix(pred, y)
+  df.confu = as.data.frame(conf_obj$table)
+  df.distr_all = c()
+  df.calib_all = c()
+  for (i in 1:length(levels(y))) {
+    #i=1
+    lev = levels(y)[i]
+    
+    # Prepare
+    df.distr = data.frame(target = factor(lev, levels = levels(y)), 
+                          y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
+    
+    df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), 
+                           cuts = quantile(df.distr$yhat, quantiles))$data
+    df.calib$target = factor(lev, levels = levels(y))
+    
+    # Collect
+    df.distr_all = bind_rows(df.distr_all, df.distr)
+    df.calib_all = bind_rows(df.calib_all, df.calib)
+  }
+  
+  
+  
+  ## Prepare "reducable" information (roc, gain, lift, precrec, prec)
+  df.roc_all = c()
+  df.precrec_all = c()
+  df.gainlift_all = c()
+  df.auc_all = c()
+  for (i in 1:length(levels(y))) {
+    #i=1
+    lev = levels(y)[i]
+    
+    # Subset on level
+    df.tmp = data.frame(target = factor(lev, levels = levels(y)), 
+                        y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
+    
+    # Create performance objects
+    pred_obj = prediction(df.tmp$yhat, df.tmp$y)
+    df.auc = data.frame(target = factor(lev, levels = levels(y)),
+                        auc = performance(pred_obj, "auc" )@y.values[[1]])
+    tprfpr = performance( pred_obj, "tpr", "fpr")
+    precrec = performance( pred_obj, "ppv", "rec")
+    tmp = ifelse(df.tmp$y == "Y", 1, 0)[order(df.tmp$yhat, decreasing = TRUE)] 
+    df.gainlift = data.frame(target = factor(lev, levels = levels(y)),
+                             "x" = 100*(1:length(df.tmp$yhat))/length(df.tmp$yhat),
+                             "gain" = 100*cumsum(tmp)/sum(tmp))
+    df.gainlift$lift = df.gainlift$gain/df.gainlift$x 
+    
+    # Thin out reducable objects (for big test data as this reduces plot size)
+    if (!is.null(reduce_factor)) {
+      set.seed(123)
+      i.reduce = sample(1:nrow(df.tmp), floor(reduce_factor * nrow(df.tmp)))
+      i.reduce = i.reduce[order(i.reduce)]
+      for (type in c("x.values","y.values","alpha.values")) {
+        slot(tprfpr, type)[[1]] = slot(tprfpr, type)[[1]][i.reduce]
+        slot(precrec, type)[[1]] = slot(precrec, type)[[1]][i.reduce]
+      }
+      df.gainlift = df.gainlift[i.reduce,]
+    } 
+    
+    # Collect information of reduced information into data frames
+    df.roc = data.frame(target = factor(lev, levels = levels(y)),
+                        "fpr" = tprfpr@x.values[[1]], "tpr" = tprfpr@y.values[[1]],
+                        "fpr_alpha" = NA, "tpr_alpha" = NA)
+    i.alpha = map_int(seq(0.1,0.9,0.1), function(.) which.min(abs(tprfpr@alpha.values[[1]] - .)))
+    df.roc[i.alpha,"fpr_alpha"] = df.roc[i.alpha,"fpr"]
+    df.roc[i.alpha,"tpr_alpha"] = df.roc[i.alpha,"tpr"]
+    
+    df.precrec = data.frame(target = factor(lev, levels = levels(y)),
+                            "rec" = precrec@x.values[[1]], "prec" = precrec@y.values[[1]], 
+                            x = 100*(1:length(precrec@x.values[[1]]))/length(precrec@x.values[[1]]))
+    df.precrec[is.nan(df.precrec$prec),"prec"] = 1
+    df.precrec[i.alpha,"rec_alpha"] = df.precrec[i.alpha,"rec"]
+    df.precrec[i.alpha,"prec_alpha"] = df.precrec[i.alpha,"prec"]
+    df.precrec[i.alpha,"x_alpha"] = df.precrec[i.alpha,"x"]
+    
+    # Collect
+    df.roc_all = bind_rows(df.roc_all, df.roc)
+    df.auc_all = bind_rows(df.auc_all, df.auc)
+    df.precrec_all = bind_rows(df.precrec_all, df.precrec)
+    df.gainlift_all = bind_rows(df.gainlift_all, df.gainlift)
+  }
+  
+  df.tmp = data.frame(100 * table(y)/length(y))
+  colnames(df.tmp) = c("target", "x")
+  df.tmp$y = 100
+  df.gainlift_help = bind_rows(df.tmp, data.frame(target = df.tmp$target, x = 0, y = 0),
+                               data.frame(target = df.tmp$target, x = 100, y = 100)) %>% arrange(x)
+  
+  
+  ## Plots
+  # ROC
+  p_roc = ggplot(df.roc_all, aes(x = fpr, y = tpr)) +
+    geom_line(aes(color = target), size = .5) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    geom_point(aes(x = fpr_alpha, y = tpr_alpha, color = target), 
+               data = df.roc_all[!is.na(df.roc_all$fpr_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, 
+                       labels = paste0(levels(df.roc_all$target)," (",round(df.auc_all$auc,3),")"), name = "Target (AUC)") +
+    scale_x_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) + 
+    scale_y_continuous(limits = c(0,1), breaks = seq(0,1,0.1)) +
+    labs(title = paste0("ROC (mean(AUC)=", round(mean(df.auc_all$auc),3), ")"), x = expression(paste("fpr: P(", hat(y), "=1|y=0)", sep = "")),
+         y = expression(paste("tpr: P(", hat(y), "=1|y=1)", sep = ""))) + 
+    #geom_label(data = data.frame(x = 0.9, y = 0.1, text = paste0("AUC: ",round(auc,3))), aes(x = x, y = y, label = text)) +
+    #geom_label(aes(x, y, label = text), data.frame(x=0.7, y=0.3, text = lev), size = 7) +
+    theme_my +
+    theme(legend.position = c(0.75,0.5), legend.background = element_rect(color = "black"))
+  
+  # Condusion Matrix
+  p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
+    geom_tile(aes(fill = Freq)) + 
+    geom_text(aes(label = Freq)) +
+    scale_fill_gradient(low = "white", high = "blue") +
+    scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
+    labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
+    theme_my 
+  
+  # Stratified distribution of predictions (plot similar to plot_distr_metr)
+  p_distr = ggplot(data = df.distr_all, aes_string("yhat")) +
+    geom_histogram(aes(y = ..density.., fill = y), bins = 40, position = "identity") +
+    geom_density(aes(color = y)) +
+    scale_fill_manual(values = alpha(c("blue","red"), .2), name = "Target (y)") + 
+    scale_color_manual(values = c("blue","red"), name = "Target (y)") +
+    labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
+    guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
+    facet_wrap("target", scales = "free")
+  
+  # Gain + Lift
+  p_gain = ggplot(df.gainlift_all) +
+    # geom_polygon(aes(x, y, color = target), data.frame(x = c(0,100,100*sum(tmp)/length(tmp)), y = c(0,100,100)), 
+    #              fill = "grey90", alpha = 0.5) +
+    geom_line(aes(x, gain, color = target), size = .5) +
+    geom_line(aes(x, y, color = target), df.gainlift_help, size = .5, linetype = 2) +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Gain", x = "% Samples Tested", y = "% Samples Found") +
+    theme_my +
+    theme(legend.position = "none")
+  p_lift = ggplot(df.gainlift_all) +
+    geom_line(aes(x, lift, color = target), size = .5) +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(limits = c(0,100), breaks = seq(0,100,10)) + 
+    labs(title = "Lift", x = "% Samples Tested", y = "Lift") +
+    theme_my +
+    theme(legend.position = "none") +
+    facet_wrap("target", scales = "free_y")
+  
+  # Calibrate
+  p_calib = ggplot(df.calib_all, aes(midpoint, Percent)) +
+    geom_line(aes(color = target)) +
+    geom_point(aes(color = target)) +  
+    scale_color_manual(values = colors, name = "Target (y)") +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    scale_x_continuous(limits = c(0,100), breaks = seq(10,90,20)) + 
+    scale_y_continuous(limits = c(0,100), breaks = seq(0,100,10)) +
+    labs(title = "Calibration", x = "Midpoint Predicted Event Probability", y = "Observed Event Percentage") +
+    theme_my +
+    theme(legend.position = "none")
+  
+  # Precision Recall
+  p_precrec = ggplot(df.precrec_all, aes(rec, prec)) +
+    geom_line(aes(color = target), size = .5) +
+    #geom_point(aes(color = target), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    geom_point(aes(x = rec_alpha, y = prec_alpha, color = target), 
+               data = df.precrec_all[!is.na(df.precrec_all$rec_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(breaks = seq(0,1,0.1)) +
+    labs(title = "Precision Recall Curve", x = expression(paste("recall=tpr: P(", hat(y), "=1|y=1)", sep = "")),
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my +
+    theme(legend.position = "none")
+  
+  # Precision
+  p_prec = ggplot(df.precrec_all, aes(x, prec)) +
+    geom_line(aes(color = target), size = .5) +
+    #geom_point(aes(x, prec), df.precrec[i.alpha,], color = "red", size = 0.8) +
+    geom_point(aes(x = x_alpha, y = prec_alpha, color = target), 
+               data = df.precrec_all[!is.na(df.precrec_all$x_alpha),], size = 3, shape = "x") +
+    scale_color_manual(values = colors, name = "Target (y)") +
+    scale_x_continuous(breaks = seq(0,100,10)) +
+    labs(title = "Precision", x = "% Samples Tested",
+         y = expression(paste("precision: P(y=1|", hat(y), "=1)", sep = ""))) +
+    theme_my +
+    theme(legend.position = "none")
+  
+  
+  # Plot
+  plots = list(p_roc = p_roc, p_confu = p_confu, p_distr = p_distr, p_calib = p_calib, 
+               p_gain = p_gain, p_lift = p_lift, p_precrec = p_precrec, p_prec = p_prec)
+  plots
+}
+
+
+# Get plot list for Observed vs. Fitted, Residuals, Calibration, Distribution
+get_plot_performance_regr = function(yhat, y, quantiles = seq(0.05, 0.95, 0.1), 
+                                     colors = twocol, gradcol = hexcol, ylim = NULL) {
+  
+  ## Prepare
+  pred_obj = mysummary_regr(data.frame(y = y, yhat = yhat))
+  spearman = round(pred_obj["spearman"], 2)
+  df.perf = data.frame(y = y, yhat = yhat, res = y - yhat, absres = abs(y - yhat), rel_absres = abs(y - yhat) / abs(y),
+                       midpoint = cut(yhat, quantile(yhat, quantiles), include.lowest = TRUE))
+  df.distr = data.frame(type = c(rep("y", length(y)), rep("yhat", length(y))),
+                        value = c(y, yhat))
+  df.calib = df.perf %>% group_by(midpoint) %>% summarise(y = mean(y), yhat = mean(yhat))
+  
+  
+  ## Performance plot
+  p_perf = ggplot(data = df.perf, aes_string("yhat", "y")) +
+    geom_hex() + 
+    scale_fill_gradientn(colors = gradcol, name = "count") +
+    geom_smooth(color = "black", level = 0.95, size = 0.5) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    labs(title = bquote(paste("Observed vs. Fitted (", rho[spearman], " = ", .(spearman), ")", sep = "")),
+         x = expression(hat(y))) +
+    theme(plot.title = element_text(hjust = 0.5))
+  if (length(ylim)) p_perf = p_perf + xlim(ylim) + ylim(ylim)
+  
+  
+  ## Distribution of predictions and target (plot similar to plot_distr_metr)
+  p_distr = ggplot(data = df.distr, aes_string("value")) +
+    geom_histogram(aes(y = ..density.., fill = type), bins = 40, position = "identity") +
+    geom_density(aes(color = type)) +
+    scale_fill_manual(values = alpha(colors, .2), labels = c("y", expression(paste(hat(y)))), name = " ") + 
+    scale_color_manual(values = colors, labels = c("y", expression(paste(hat(y)))), name = " ") +
+    labs(title = "Distribution", x = " ") +
+    guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE))
+  if (length(ylim)) p_distr = p_distr + xlim(ylim)
+  tmp = ggplot_build(p_distr)
+  p.inner = ggplot(data = df.distr, aes_string("type", "value")) +
+    geom_boxplot(aes_string(color = "type")) +
+    coord_flip() +
+    scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin), max(tmp$data[[1]]$xmax))) +
+    scale_color_manual(values = colors, name = " ") +
+    theme_void() +
+    theme(legend.position = "none")
+  if (length(ylim)) p.inner = p.inner + ylim(ylim)
+  p_distr = p_distr + 
+    scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/10, NA)) +
+    theme_my +
+    annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) 
+  
+  
+  
+  ## Calibration
+  p_calib = ggplot(df.calib, aes(yhat, y)) +
+    geom_line(color = "black") +
+    geom_point(color = "black") +  
+    xlim(range(c(df.calib$y,df.calib$yhat))) +
+    ylim(range(c(df.calib$y,df.calib$yhat))) +
+    geom_abline(intercept = 0, slope = 1, color = "grey") + 
+    labs(title = "Calibration", x = "Prediction Average (in quantile bin)", y = "Observation Average") +
+    theme_my 
+  
+  
+  ## Two sided scatter: used for Residual plots
+  res_plot = function(df.plot = df.perf, x = "yhat", y = "res", title = "Residuals vs. Fitted", 
+                      xlab = expression(hat(y)), ylab = expression(paste(hat(y) - y))) {
+    
+    
+    p_res = ggplot(data = df.plot, aes_string(x, y)) +
+      geom_hex() + 
+      scale_fill_gradientn(colors = gradcol, name = "count") +
+      geom_smooth(color = "black", level = 0.95, size = 0.5) +
+      labs(title = title, x = xlab, y = ylab) +
+      theme(plot.title = element_text(hjust = 0.5))
+    if (length(ylim)) p_res = p_res + xlim(ylim)
+    tmp = ggplot_build(p_res)
+    xrange = tmp$layout$panel_ranges[[1]]$x.range
+    yrange = tmp$layout$panel_ranges[[1]]$y.range
+    p.inner_x = ggplot(data = df.plot, aes_string(x = x)) +
+      geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+      scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      geom_density(color = "black") +
+      theme_void()
+    tmp = ggplot_build(p.inner_x)
+    p.inner_x_inner = ggplot(data = df.plot, aes_string(x = 1, y = x)) +
+      geom_boxplot(color = "black") +
+      coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+      theme_void()
+    p.inner_x = p.inner_x + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$y.range[2]/3, NA)) +
+      theme_void() +
+      annotation_custom(ggplotGrob(p.inner_x_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                        ymax = -tmp$layout$panel_ranges[[1]]$y.range[2]/(3*5)) 
+    
+    p.inner_y = ggplot(data = df.plot, aes_string(x = y)) +
+      geom_histogram(aes(y = ..density..), bins = 50, position = "identity", fill = "grey", color = "black") +
+      scale_x_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+      geom_density(color = "black") +
+      coord_flip() +
+      theme_void()
+    tmp = ggplot_build(p.inner_y)
+    p.inner_y_inner = ggplot(data = df.plot, aes_string(x = 1, y = y)) +
+      geom_boxplot(color = "black") +
+      #coord_flip() +
+      scale_y_continuous(limits = c(min(tmp$data[[1]]$xmin, na.rm = TRUE), max(tmp$data[[1]]$xmax, na.rm = TRUE))) +
+      theme_void()
+    p.inner_y = p.inner_y + 
+      scale_y_continuous(limits = c(-tmp$layout$panel_ranges[[1]]$x.range[2]/3, NA)) +
+      theme_void() +
+      annotation_custom(ggplotGrob(p.inner_y_inner), xmin = -Inf, xmax = Inf, ymin = -Inf, 
+                        ymax = -tmp$layout$panel_ranges[[1]]$x.range[2]/(3*5))
+    
+    p_res + 
+      scale_x_continuous(limits = c(xrange[1] - 0.2*(xrange[2] - xrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+      scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), NA)) +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      annotation_custom(ggplotGrob(p.inner_x), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) +
+      annotation_custom(ggplotGrob(p.inner_y), xmin = -Inf, xmax = xrange[1], ymin = -Inf, ymax = Inf)
+  }
+  
+  p_res = res_plot()
+  p_absres = res_plot(y = "absres", title = "absolute Residuals vs. Fitted", 
+                      ylab = expression(paste("|",hat(y) - y,"|")))
+  p_rel_absres = res_plot(y = "rel_absres", title = "rel. absolute Residuals vs. Fitted", 
+                          ylab = expression(paste("|",hat(y) - y,"| / |y|")))
+  
+  # Plot
+  plots = list(p_perf, p_calib, p_distr, p_res, p_absres, p_rel_absres)
+  plots
+}
 
 
 # # Variable importance by permutation argument 
@@ -1244,7 +1147,7 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   # Original performance
   if (is.factor(df.for_varimp[[target_name]])) {
     if (!dmatrix) {
-      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])[[2]]
     } else {
       options(na.action = "na.pass")
       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
@@ -1434,17 +1337,19 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 
 
 # Partial dependance on green field
-get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, dmatrix = TRUE,
+get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, 
                           predictor_names = predictors, target_name = "target",
                           vars = topn_vars, levs, quantiles) {
   
+  if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
+  
   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"),
-                          .export = c("scale_pred","b_sample","b_all")) %dopar% 
+                          .export = c("prob_samp2full","b_sample","b_all")) %dopar% 
   {
     #i=1
     print(vars[i])
     
-    # Initialize result set
+    # Initialize resutl set
     df.res = c()
     
     # Define grid to loop over
@@ -1459,12 +1364,12 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
       if (is.factor(df.for_partialdep[[target_name]])) {
         if (!dmatrix) {
-          yhat = scale_pred(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob"), b_sample, b_all)[,2]
+          yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]], b_sample, b_all)
         } else {
-          yhat = scale_pred(predict(fit.for_partialdep, 
+          yhat = prob_samp2full(predict(fit.for_partialdep, 
                                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
                                                                         data = df.tmp[predictor_names])), 
-                                        type = "prob"), b_sample, b_all)[,2]
+                                        type = "prob")[[2]], b_sample, b_all)
         }
       } else {
         if (!dmatrix) {
@@ -1591,16 +1496,15 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 get_explanations = function(fit.for_explain = fit,
                             df.train_explain = df.train[predictors], 
                             df.test_explain = df.test[i.explain, c("id", predictors)],
-                            preds = yhat_explain[i.explain],
                             id_name = "id", predictor_names = predictors, formula = formula_rightside,
                             type = "class") {
-  #browser()
   
   # Get model matrix and DMatrix for train and test (sample) data
   m.model_train = sparse.model.matrix(formula_rightside, data = df.train_explain[predictor_names])
   dm.train = xgb.DMatrix(m.model_train) 
   m.test_explain = sparse.model.matrix(formula_rightside, data = df.test_explain[predictor_names])
   dm.test_explain = xgb.DMatrix(m.test_explain)
+  
   
   
   ## Create explainer data table from train data
@@ -1618,7 +1522,7 @@ get_explanations = function(fit.for_explain = fit,
   ## Get explanations for predictions of test data
   df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, dm.test_explain)
   if (type == "class") {
-    df.predictions$intercept = logit(scale_pred(inv.logit(df.predictions$intercept), b_sample, b_all)[2])
+    df.predictions$intercept = logit(prob_samp2full(inv.logit(df.predictions$intercept), b_sample, b_all))
   }
   
   # Aggregate predictions for all nominal variables
@@ -1635,8 +1539,8 @@ get_explanations = function(fit.for_explain = fit,
   
   # Check
   if (type == "class") left = inv.logit(rowSums(df.predictions[,-1])) else left = rowSums(df.predictions[,-1])
-  if (all.equal(left, preds, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
-    print("Predictions and explanations DO NOT map!!!")
+  if (all.equal(left, yhat_test[i.explain], tolerance = 1e-5)) print("Predictions and explanations map")
+  else print("Predictions and explanations DO NOT map!!!")
   
   df.predictions$id = df.test_explain$id 
   df.predictions
