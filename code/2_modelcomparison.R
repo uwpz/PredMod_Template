@@ -36,7 +36,7 @@ registerDoParallel(cl)
 
 if (TYPE %in% c("class","multiclass")) {
   # Just take data from train fold
-  n_maxpersample = 400 #Take all but n_maxpersample at most
+  n_maxpersample = 800 #Take all but n_maxpersample at most
   summary(df[df$fold == "train", "target"])
   df.train = c()
   for (i in 1:length(levels(df$target))) {
@@ -91,8 +91,8 @@ ctrl_idx_nopar_fff = trainControl(method = "cv", number = 1, index = l.index,
 # Fits --------------------------------------------------------------------------------------------
 
 ## Lasso / Elastic Net
-fit = train(sparse.model.matrix(formula_binned_rightside, df.train[predictors_binned]), df.train$target,
-#fit = train(formula_binned, data = df.train[c("target",predictors_binned)], 
+fit = train(sparse.model.matrix(formula_binned_rightside, df.train[features_binned]), df.train$target,
+#fit = train(formula_binned, data = df.train[c("target",features_binned)], 
             trControl = ctrl_idx_fff, metric = metric, 
             method = "glmnet", 
             tuneGrid = expand.grid(alpha = c(0,0.2,0.4,0.6,0.8,1), lambda = 2^(seq(-3, -10, -1))))
@@ -103,29 +103,30 @@ plot(fit)
 
 
 ## Random Forest
-fit = train(df.train[predictors], df.train$target, 
+fit = train(df.train[features], df.train$target, 
             trControl = ctrl_idx_fff, metric = metric, 
             method = "ranger", 
-            tuneGrid = expand.grid(mtry = seq(1,length(predictors),10),
+            tuneGrid = expand.grid(mtry = seq(1,length(features),10),
                                    splitrule = splitrule,
                                    min.node.size = c(1,5,10)), 
             num.trees = 500) #use the Dots (...) for explicitly specifiying randomForest parameter
 plot(fit)
 
 if (TYPE != "multiclass") {
-  fit = train(as.data.frame(df.train[predictors]), df.train$target,
+  fit = train(as.data.frame(df.train[features]), df.train$target,
               trControl = ctrl_idx_fff, metric = metric,
               method = ms_forest,
               tuneGrid = expand.grid(numTrees = c(100,300,500), splitFraction = c(0.1,0.3,0.5)),
               verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
   plot(fit)
-  # # -> keep around the recommended values: mtry = floor(sqrt(length(predictors))) or splitFraction = 0.3
+  # # -> keep around the recommended values: mtry = floor(sqrt(length(features))) or splitFraction = 0.3
 }
 
 
-# Boosted Trees
-fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[predictors])), df.train$target,
-#fit = train(formula, data = df.train[c("target",predictors)],
+
+## Boosted Trees
+fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), df.train$target,
+#fit = train(formula, data = df.train[c("target",features)],
             trControl = ctrl_idx_nopar_fff, metric = metric, #no parallel for DMatrix
             method = "xgbTree", 
             tuneGrid = expand.grid(nrounds = seq(100,2100,200), max_depth = c(3,6), 
@@ -134,7 +135,7 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[predicto
 plot(fit)
 
 if (TYPE != "multiclass") {
-  fit = train(df.train[predictors], df.train$target,
+  fit = train(df.train[features], df.train$target,
               trControl = ctrl_idx_fff, metric = metric,
               method = ms_boosttree,
               tuneGrid = expand.grid(numTrees = seq(100,2100,500), numLeaves = c(10,20),
@@ -142,18 +143,19 @@ if (TYPE != "multiclass") {
                                      minSplit = c(10), exampleFraction = c(0.7)),
               verbose = 0) #!numTrees is not a sequential parameter (like in xgbTree)
   plot(fit)
+
+  fit = train(sparse.model.matrix(formula_rightside, df.train[features]), df.train$target,
+  #fit = train(formula_binned, data = as.data.frame(df.train[c("target",features_binned)]),
+              trControl = ctrl_idx_fff, metric = metric,
+              method = lgbm,
+              tuneGrid = expand.grid(nrounds = seq(100,1100,200), num_leaves = c(5),
+                                     learning_rate = c(0.01, 0.1), feature_fraction = c(0.7),
+                                     min_data_in_leaf = c(10), bagging_fraction = c(0.7)),
+              max_depth = 3,
+              verbose = 0)
+  plot(fit)
+  # -> max_depth = 3 / numLeaves = 20, shrinkage = 0.01, colsample_bytree = subsample = 0.7, min_xxx = 5
 }
-#fit = train(sparse.model.matrix(formula_binned_rightside, df.train[predictors_binned]), df.train$target,
-# fit = train(formula_binned, data = as.data.frame(df.train[c("target",predictors_binned)]),
-#             trControl = ctrl_idx_nopar_fff, metric = metric,
-#             method = lgbm,
-#             tuneGrid = expand.grid(nrounds = seq(100,2100,500), num_leaves = c(5),
-#                                    learning_rate = c(0.1), feature_fraction = c(0.7),
-#                                    min_data_in_leaf = c(10), bagging_fraction = c(0.7)),
-#             max_depth = 3,
-#             verbose = 0)
-# plot(fit)
-# -> max_depth = 3 / numLeaves = 20, shrinkage = 0.01, colsample_bytree = subsample = 0.7, min_xxx = 5
 
 
 
@@ -202,7 +204,7 @@ skip = function() {
 #######################################################################################################################-
 
 # Data to compare on
-df.comp = df.train
+df.comp = df #%>% sample_n(1000)
 
 
 
@@ -212,7 +214,7 @@ perfcomp = function(method, nsim = 5) {
   
   result = foreach(sim = 1:nsim, .combine = bind_rows, .packages = c("caret","Matrix","xgboost"), 
                    .export = c("df.comp","mysummary","metric","type",
-                               "predictors_binned","predictors",
+                               "features_binned","features",
                                "formula","formula_binned","formula_rightside","formula_binned_rightside")) %dopar% 
   {
     
@@ -239,8 +241,8 @@ perfcomp = function(method, nsim = 5) {
     fit = NULL
     
     if (method == "glmnet") {  
-      fit = train(sparse.model.matrix(formula_binned_rightside, df.train[predictors_binned]), df.train$target,
-      #fit = train(formula_binned, data = df.train[c("target",predictors_binned)], 
+      fit = train(sparse.model.matrix(formula_binned_rightside, df.train[features_binned]), df.train$target,
+      #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
                   trControl = ctrl_idx, metric = metric, 
                   method = "glmnet", 
                   tuneGrid = expand.grid(alpha = 1, lambda = 2^(seq(-3, -10, -1))))
@@ -248,8 +250,8 @@ perfcomp = function(method, nsim = 5) {
     
 
     if (method == "xgbTree") { 
-      fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[predictors])), df.train$target,
-      #fit = train(formula, data = df.train[c("target",predictors)],
+      fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), df.train$target,
+      #fit = train(formula, data = df.train[c("target",features)],
                   trControl = ctrl_idx_nopar, metric = metric, #no parallel for DMatrix
                   method = "xgbTree", 
                   tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = 6, 
@@ -263,13 +265,13 @@ perfcomp = function(method, nsim = 5) {
     
     # Calculate holdout performance
     if (method %in% c("glmnet")) {
-      yhat_holdout = predict(fit, sparse.model.matrix(formula_binned_rightside, df.holdout[predictors_binned]),
+      yhat_holdout = predict(fit, sparse.model.matrix(formula_binned_rightside, df.holdout[features_binned]),
                              type = type) 
     } else if (method == "xgbTree") {
-      yhat_holdout = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.holdout[predictors])),
+      yhat_holdout = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.holdout[features])),
                              type = type)
     } else  {
-      yhat_holdout = predict(fit, df.holdout[predictors], type = type) 
+      yhat_holdout = predict(fit, df.holdout[features], type = type) 
     }
     yhat = yhat_holdout
     perf_holdout = mysummary(data.frame(y = df.holdout$target, yhat))
@@ -318,11 +320,9 @@ ggsave(paste0(plotloc,TYPE,"_model_comparison.pdf"), p, width = 12, height = 8)
 
 skip = function() {
   # For testing on smaller data
-  df.train = df.train %>% sample_n(500)
-  df.test = df.test %>% sample_n(500)
+  df.train = df %>% filter(fold == "train") #%>% sample_n(500)
+  df.test = df %>% filter(fold == "test") #%>% sample_n(500)
 }
-
-
 
 
 #---- Loop over training chunks --------------------------------------------------------------------------------------
@@ -338,6 +338,11 @@ df.lc = foreach(i = 1:to, .combine = bind_rows,
   ## Sample chunk
   set.seed(chunks_pct[i])
   i.samp = sample(1:nrow(df.train), floor(chunks_pct[i]/100 * nrow(df.train)))
+  # Balanced ("as long as possible")
+  n_max = max(summary(df.train$target))
+  i.samp = unlist(map(levels(df.train$target), ~ {
+   which(df.train$target == .x) %>% sample(min(length(.), n_max * chunks_pct[i]/100))
+  }))
   print(length(i.samp))
   
   
@@ -351,7 +356,7 @@ df.lc = foreach(i = 1:to, .combine = bind_rows,
                                 summaryFunction = mysummary, classProbs = TRUE)
   #ctrl_none = trainControl(method = "none", returnData = FALSE, classProbs = TRUE)
   tmp = Sys.time()
-  fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.samp,predictors])), 
+  fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.samp,features])), 
               df.train[i.samp,]$target,
               trControl = ctrl_idx_nopar, metric = metric, #no parallel for DMatrix
               method = "xgbTree", 
@@ -365,11 +370,11 @@ df.lc = foreach(i = 1:to, .combine = bind_rows,
   ## Score (needs rescale to prior probs)
   # Train data 
   y_train = df.train[i.samp,]$target
-  yhat_train_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.samp,predictors])),
+  yhat_train_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.samp,features])),
                                 type = type)
   if (TYPE %in% c("class","multiclass")) {
     b_sample = df.train$target %>% (function(.) {summary(.)/length(.)}) #new b_sample
-    yhat_train = scale_prob(yhat_train_unscaled, b_sample, b_all)
+    yhat_train = scale_pred(yhat_train_unscaled, b_sample, b_all)
   }
   if (TYPE == "regr") yhat_train = yhat_train_unscaled
 
@@ -377,11 +382,11 @@ df.lc = foreach(i = 1:to, .combine = bind_rows,
   y_test = df.test$target
   yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula, df.test)), type = type)
   # # Scoring in chunks in parallel in case of high memory consumption of xgboost
-  # l.split = split(df.test[predictors], (1:nrow(df.test)) %/% 50000)
+  # l.split = split(df.test[features], (1:nrow(df.test)) %/% 50000)
   # yhat_test_unscaled = foreach(df.split = l.split, .combine = bind_rows) %dopar% {
   #   predict(fit, xgb.DMatrix(sparse.model.matrix(formula, df.split)), type = type)
   # }
-  if (TYPE %in% c("class","multiclass")) yhat_test = scale_prob(yhat_test_unscaled, b_sample, b_all)
+  if (TYPE %in% c("class","multiclass")) yhat_test = scale_pred(yhat_test_unscaled, b_sample, b_all)
   if (TYPE == "regr") yhat_test = yhat_test_unscaled
     
   # Bind together

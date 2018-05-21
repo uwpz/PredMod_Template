@@ -217,7 +217,7 @@ mysummary = function(data, lev = NULL, model = NULL)
 
 ## Get plot list of metric variables vs target 
 get_plot_distr_metr = function(df.plot = df, vars = metr, target_name = "target", 
-                               missinfo = NULL, varimpinfo = NULL, nbins = 50, offset = 14, ylim = NULL, 
+                               missinfo = NULL, varimpinfo = NULL, nbins = 20, offset = 14, ylim = NULL, 
                                legend_only_in_1stplot = TRUE, color) {
   ## Classification
   if (is.factor(df.plot[[target_name]])) {
@@ -326,8 +326,9 @@ get_plot_distr_metr = function(df.plot = df, vars = metr, target_name = "target"
 get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target", 
                                varimpinfo = NULL, min_width = 0, inner_barplot = FALSE, ylim = NULL, decimals = 1,
                                legend_only_in_1stplot = TRUE, color) {
+  #browser()
   ## Classification
-  if(is.factor(df.plot[[target_name]])) {
+  if (is.factor(df.plot[[target_name]])) {
     # Get levels of target
     levs_target = levels(df.plot[[target_name]])
     
@@ -340,7 +341,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       if (length(levels(df.plot[[target_name]])) > 2) multiclass = TRUE else multiclass = FALSE
       
       # Proportion nominal variable
-      df.hlp1 = df.plot %>% 
+      df.hlp = df.plot %>% 
         group_by_(.x) %>% 
         summarise(perc = n()/nrow(df.plot))
       
@@ -359,7 +360,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
           summarise(prop = n()) %>% 
           group_by_(.x) %>% 
           mutate(prop = prop/sum(prop)) %>% 
-          left_join(df.hlp1) %>% 
+          left_join(df.hlp) %>% 
           mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
                                    target_name)) %>%  
           mutate(width = perc/max(.$perc)) %>%  
@@ -369,7 +370,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       # Just take "Y"-class in non-multiclass case
       if (!multiclass) {
         df.ggplot = df.ggplot %>% filter_(paste0(target_name," == 'Y'")) 
-        df.hlp1 = df.ggplot
+        df.hlp = df.ggplot
       }
       
       # Adpat color
@@ -384,7 +385,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       } 
       p = p +
         scale_fill_manual(values = alpha(color, 0.2)) +
-        scale_x_discrete(labels = paste0(df.hlp1[[.x]], " (", round(100 * df.hlp1[["perc"]], decimals), "%)")) + 
+        scale_x_discrete(labels = paste0(df.hlp[[.x]], " (", round(100 * df.hlp[["perc"]], decimals), "%)")) + 
         geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
         labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", round(varimpinfo[.x], 2), ")")), 
              x = "", 
@@ -394,7 +395,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       
       if (inner_barplot) {   
         # Inner Barplot
-        p.inner = ggplot(data = df.ggplot, aes_string(x = .x, y = "perc")) +
+        p.inner = ggplot(data = df.hlp, aes_string(x = .x, y = "perc")) +
           geom_bar(stat= "identity", fill = "grey", colour = "black", width = 0.9) +
           coord_flip() +
           #scale_x_discrete(limits = rev(df.tmp2[[.]]), labels = rev(df.tmp2$label)) +
@@ -415,7 +416,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
   }
   
   ## Regression
-  if(is.numeric(df.plot[[target_name]])) {
+  if (is.numeric(df.plot[[target_name]])) {
     # Drop unused levels
     df.plot = droplevels(df.plot)
     
@@ -440,17 +441,19 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       # Get underlying data for max of y-value and range of x-value
       yrange = ggplot_build(p)$layout$panel_ranges[[1]]$x.range
       
-      # Inner Barplot
-      p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
-        geom_bar(fill = "grey", colour = "black", width = 0.9) +
-        coord_flip() +
-        theme_void()
-      
-      # Put all together
-      p = p + 
-        scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
-        theme_my +
-        annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
+      if (inner_barplot) {  
+        # Inner Barplot
+        p.inner = ggplot(data = df.plot, aes_string(x = .x)) +
+          geom_bar(fill = "grey", colour = "black", width = 0.9) +
+          coord_flip() +
+          theme_void()
+        
+        # Put all together
+        p = p + 
+          scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
+          theme_my +
+          annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = yrange[1]) 
+      }
       p   
     })
   }
@@ -1138,19 +1141,19 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 
 # # Variable importance by permutation argument 
 # get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit,
-#                                      predictor_names = predictors, target_name = "target",
-#                                      vars = predictors,  metric = "auc") {
+#                                      feature_names = features, target_name = "target",
+#                                      vars = features,  metric = "auc") {
 #   
 #   if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
 #   
 #   # Original performance
 #   if (is.factor(df.for_varimp[[target_name]])) {
 #     if (!dmatrix) {
-#       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])[[2]]
+#       yhat = predict(fit.for_varimp, df.for_varimp[feature_names])[[2]]
 #     } else {
 #       options(na.action = "na.pass")
-#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                        data = df.for_varimp[predictor_names]))
+#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                        data = df.for_varimp[feature_names]))
 #       options(na.action = "na.omit")
 #       yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
 #       if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
@@ -1165,11 +1168,11 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 #     }
 #   } else {
 #     if (!dmatrix) {
-#       yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+#       yhat = predict(fit.for_varimp, df.for_varimp[feature_names])
 #     } else {
 #       options(na.action = "na.pass")
-#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                        data = df.for_varimp[predictor_names]))
+#       dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                        data = df.for_varimp[feature_names]))
 #       options(na.action = "na.omit")
 #       yhat = predict(fit.for_varimp, dm.for_varimp)
 #     }
@@ -1189,11 +1192,11 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 #     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
 #     if (is.factor(df.for_varimp[[target_name]])) {
 #       if (!dmatrix) {
-#         yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")[[2]]
+#         yhat = predict(fit.for_varimp, df.tmp[feature_names], type = "prob")[[2]]
 #       } else {
 #         options(na.action = "na.pass")
-#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                   data = df.tmp[predictor_names]))
+#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                   data = df.tmp[feature_names]))
 #         options(na.action = "na.omit")
 #         yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
 #         if (length(levels(df.for_varimp[[target_name]])) == 2) yhat = yhat[[2]]
@@ -1208,11 +1211,11 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 #       }
 #     } else {
 #       if (!dmatrix) {
-#         yhat = predict(fit.for_varimp, df.tmp[predictor_names])
+#         yhat = predict(fit.for_varimp, df.tmp[feature_names])
 #       } else {
 #         options(na.action = "na.pass")
-#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                   data = df.tmp[predictor_names]))
+#         dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                   data = df.tmp[feature_names]))
 #         options(na.action = "na.omit")
 #         yhat = predict(fit.for_varimp, dm.tmp)
 #       }        
@@ -1235,17 +1238,17 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 
 # Variable importance by permutation argument 
 get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, dmatrix = TRUE,
-                                     predictor_names = predictors, target_name = "target",
-                                     vars = predictors,  metric = "auc") {
+                                     feature_names = features, target_name = "target",
+                                     vars = features,  metric = "auc") {
   
   # Original performance
   if (is.factor(df.for_varimp[[target_name]])) {
     if (!dmatrix) {
-      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+      yhat = predict(fit.for_varimp, df.for_varimp[feature_names])
     } else {
       options(na.action = "na.pass")
-      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                       data = df.for_varimp[predictor_names]))
+      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                       data = df.for_varimp[feature_names]))
       options(na.action = "na.omit")
       yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
     }
@@ -1253,11 +1256,11 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
                                      as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
   } else {
     if (!dmatrix) {
-      yhat = predict(fit.for_varimp, df.for_varimp[predictor_names])
+      yhat = predict(fit.for_varimp, df.for_varimp[feature_names])
     } else {
       options(na.action = "na.pass")
-      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                       data = df.for_varimp[predictor_names]))
+      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                       data = df.for_varimp[feature_names]))
       options(na.action = "na.omit")
       yhat = predict(fit.for_varimp, dm.for_varimp)
     }
@@ -1276,11 +1279,11 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
     if (is.factor(df.for_varimp[[target_name]])) {
       if (!dmatrix) {
-        yhat = predict(fit.for_varimp, df.tmp[predictor_names], type = "prob")
+        yhat = predict(fit.for_varimp, df.tmp[feature_names], type = "prob")
       } else {
         options(na.action = "na.pass")
-        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                  data = df.tmp[predictor_names]))
+        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                  data = df.tmp[feature_names]))
         options(na.action = "na.omit")
         yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
       }
@@ -1288,11 +1291,11 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
                                   as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
     } else {
       if (!dmatrix) {
-        yhat = predict(fit.for_varimp, df.tmp[predictor_names])
+        yhat = predict(fit.for_varimp, df.tmp[feature_names])
       } else {
         options(na.action = "na.pass")
-        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                  data = df.tmp[predictor_names]))
+        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                  data = df.tmp[feature_names]))
         options(na.action = "na.omit")
         yhat = predict(fit.for_varimp, dm.tmp)
       }        
@@ -1313,7 +1316,7 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
 
 # Get plot list for variable importance
 get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue","orange","red"), 
-                           length_predictors = length(predictors),
+                           length_features = length(features),
                            df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   # Subset
   df.ggplot = df.plot %>% filter(variable %in% vars)
@@ -1323,8 +1326,8 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
   p_imp = ggplot(df.ggplot) +
     geom_bar(aes(x = reorder(variable, importance), y = importance, fill = color), stat = "identity") +
     scale_fill_manual(values = col) +
-    labs(title = paste0("Top ", min(length(vars), length_predictors)," Important Variables (of ", 
-                        length_predictors, ")"), 
+    labs(title = paste0("Top ", min(length(vars), length_features)," Important Variables (of ", 
+                        length_features, ")"), 
          x = "", y = "Importance (scaled to 100)") +
     coord_flip() +
     guides(fill = guide_legend(reverse = TRUE, title = "")) +
@@ -1359,8 +1362,8 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
   p_impcum = ggplot(df.ggplot) +
     geom_bar(aes(x = reorder(variable, importance), y = importance_cum, fill = color), stat = "identity") +
     scale_fill_manual(values = col) +
-    labs(title = paste0("Top ", min(length(vars), length_predictors)," Important Variables (of ", 
-                        length_predictors, ")"), 
+    labs(title = paste0("Top ", min(length(vars), length_features)," Important Variables (of ", 
+                        length_features, ")"), 
          x = "", y = "Cumulative Importance (in %)") +
     coord_flip(ylim = c(0, 100)) +
     guides(fill = guide_legend(reverse = TRUE, title = "")) +
@@ -1374,7 +1377,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 
 # # Partial dependance on green field
 # get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, 
-#                           predictor_names = predictors, target_name = "target",
+#                           feature_names = features, target_name = "target",
 #                           vars = topn_vars, levs, quantiles) {
 #   
 #   if (any(str_detect(as.character(fit$call),"xgb.DMatrix"))) dmatrix = TRUE else dmatrix = FALSE
@@ -1400,20 +1403,20 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 #       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
 #       if (is.factor(df.for_partialdep[[target_name]])) {
 #         if (!dmatrix) {
-#           yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob")[[2]], b_sample, b_all)
+#           yhat = prob_samp2full(predict(fit.for_partialdep, df.tmp[feature_names], type = "prob")[[2]], b_sample, b_all)
 #         } else {
 #           yhat = prob_samp2full(predict(fit.for_partialdep, 
-#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                          data = df.tmp[predictor_names])), 
+#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                          data = df.tmp[feature_names])), 
 #                          type = "prob")[[2]], b_sample, b_all)
 #         }
 #       } else {
 #         if (!dmatrix) {
-#           yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+#           yhat = predict(fit.for_partialdep, df.tmp[feature_names])
 #         } else {
 #           yhat = predict(fit.for_partialdep, 
-#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-#                                                          data = df.tmp[predictor_names])))
+#                          xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+#                                                          data = df.tmp[feature_names])))
 #         }        
 #       }
 #       # IMPORTANT: rescale before averaging
@@ -1432,7 +1435,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 
 # Partial dependance on green field
 get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, dmatrix = TRUE,
-                          predictor_names = predictors, target_name = "target",
+                          feature_names = features, target_name = "target",
                           vars = topn_vars, levs, quantiles) {
   
   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix"),
@@ -1456,20 +1459,20 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
       if (is.factor(df.for_partialdep[[target_name]])) {
         if (!dmatrix) {
-          yhat = scale_pred(predict(fit.for_partialdep, df.tmp[predictor_names], type = "prob"), b_sample, b_all)[,2]
+          yhat = scale_pred(predict(fit.for_partialdep, df.tmp[feature_names], type = "prob"), b_sample, b_all)[,2]
         } else {
           yhat = scale_pred(predict(fit.for_partialdep, 
-                                        xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                                        data = df.tmp[predictor_names])), 
+                                        xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                                        data = df.tmp[feature_names])), 
                                         type = "prob"), b_sample, b_all)[,2]
         }
       } else {
         if (!dmatrix) {
-          yhat = predict(fit.for_partialdep, df.tmp[predictor_names])
+          yhat = predict(fit.for_partialdep, df.tmp[feature_names])
         } else {
           yhat = predict(fit.for_partialdep, 
-                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(predictor_names, collapse = " + "))), 
-                                                         data = df.tmp[predictor_names])))
+                         xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
+                                                         data = df.tmp[feature_names])))
         }        
       }
       # IMPORTANT: rescale before averaging
@@ -1586,17 +1589,17 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 
 # Get explanations data
 get_explanations = function(fit.for_explain = fit,
-                            df.train_explain = df.train[predictors], 
-                            df.test_explain = df.test[i.explain, c("id", predictors)],
+                            df.train_explain = df.train[features], 
+                            df.test_explain = df.test[i.explain, c("id", features)],
                             preds = yhat_explain[i.explain],
-                            id_name = "id", predictor_names = predictors, formula = formula_rightside,
+                            id_name = "id", feature_names = features, formula = formula_rightside,
                             type = "class") {
   #browser()
   
   # Get model matrix and DMatrix for train and test (sample) data
-  m.model_train = sparse.model.matrix(formula_rightside, data = df.train_explain[predictor_names])
+  m.model_train = sparse.model.matrix(formula_rightside, data = df.train_explain[feature_names])
   dm.train = xgb.DMatrix(m.model_train) 
-  m.test_explain = sparse.model.matrix(formula_rightside, data = df.test_explain[predictor_names])
+  m.test_explain = sparse.model.matrix(formula_rightside, data = df.test_explain[feature_names])
   dm.test_explain = xgb.DMatrix(m.test_explain)
   
   
@@ -1620,7 +1623,7 @@ get_explanations = function(fit.for_explain = fit,
   
   # Aggregate predictions for all nominal variables
   df.predictions = as.data.frame(df.predictions)
-  df.map = data.frame(varname = predictors[attr(model.matrix(formula, data = df.train[1,predictor_names]), "assign")],
+  df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train[1,feature_names]), "assign")],
                       levname = colnames(m.model_train)[-1])
   for (i in 1:length(nomi)) {
     #i=1
@@ -2155,26 +2158,29 @@ lgbm$predict = function(modelFit, newdata, submodels = NULL) {
     out <- ifelse(out >= 0.5, "Y", "N")
   }
   if (!is.null(submodels)) {
-    tmp <- vector(mode = "list", length = nrow(submodels) + 1)
+    tmp <- vector(mode = "list", length = nrow(submodels) + 
+                    1)
     tmp[[1]] <- out
     for (j in seq(along = submodels$nrounds)) {
       tmp_pred <- predict(modelFit$model, newdata, num_iteration = submodels$nrounds[j])
       if (modelFit$problemType == "Classification") {
-        out = predict(modelFit$model, newdata)
-      } else {
-        out = predict(modelFit$model, newdata)
-      }
-      if (length(modelFit$obsLevels) == 2) {
-        out <- ifelse(out >= 0.5, "Y", "N")
+        if (length(modelFit$obsLevels) == 2) {
+          tmp_pred <- ifelse(tmp_pred >= 0.5, modelFit$obsLevels[1], 
+                             modelFit$obsLevels[2])
+        } else {
+          tmp_pred <- matrix(tmp_pred, ncol = length(modelFit$obsLevels), 
+                             byrow = TRUE)
+          tmp_pred <- modelFit$obsLevels[apply(tmp_pred, 
+                                               1, which.max)]
+        }
       }
       tmp[[j + 1]] <- tmp_pred
     }
     out <- tmp
   }
   out
-}
-
-
+}  
+  
 lgbm$prob = function(modelFit, newdata, submodels = NULL) {
   #browser()
   out = predict(modelFit$model, newdata)
@@ -2190,6 +2196,10 @@ lgbm$prob = function(modelFit, newdata, submodels = NULL) {
       if (length(modelFit$obsLevels) == 2) {
         tmp_pred <- cbind(tmp_pred, 1 - tmp_pred)
         colnames(tmp_pred) <- c("Y","N")
+      } else {
+        tmp_pred <- matrix(tmp_pred, ncol = length(modelFit$obsLevels), 
+                           byrow = TRUE)
+        colnames(tmp_pred) <- modelFit$obsLevels
       }
       tmp_pred <- as.data.frame(tmp_pred)
       tmp[[j + 1]] <- tmp_pred
