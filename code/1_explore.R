@@ -1,21 +1,12 @@
 
 skip = function() {
-<<<<<<< HEAD
   # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-=======
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
   TYPE = "class"
   TYPE = "regr"
   TYPE = "multiclass"
 }
 
-<<<<<<< HEAD
 
-=======
-color = switch(TYPE, "class" = twocol,
-               "regr"  = hexcol,
-               "multiclass" = fourcol)
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 
 #######################################################################################################################-
 #|||| Initialize ||||----
@@ -24,15 +15,12 @@ color = switch(TYPE, "class" = twocol,
 # Load libraries and functions
 source("./code/0_init.R")
 
-<<<<<<< HEAD
 # Adapt some parameter -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 color = switch(TYPE, "class" = twocol, "regr" = hexcol, "multiclass" = fourcol)
 cutoff = switch(TYPE, "class" = 0.1, "regr"  = 0.9, "multiclass" = 0.9)
 ylim = switch(TYPE, "class" = NULL, "regr"  = c(0,2.5e5), "multiclass" = c(0,2.5e5))
 plotloc = paste0(plotloc,TYPE,"/")
 
-=======
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 
 
 
@@ -75,10 +63,7 @@ if (TYPE %in% c("regr","multiclass")) {
 
 
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 # Define target and train/test-fold ----------------------------------------------------------------------------------
 
 # Target
@@ -115,19 +100,13 @@ if (TYPE %in% c("regr","multiclass")) {
          "Bsmt_Unf_SF","Total_Bsmt_SF","first_Flr_SF","second_Flr_SF","Low_Qual_Fin_SF","Gr_Liv_Area",
          "Garage_Yr_Blt","Garage_Area","Wood_Deck_SF","Open_Porch_SF","Enclosed_Porch","threeSsn_Porch","Screen_Porch",
          "Pool_Area","Misc_Val") 
-<<<<<<< HEAD
   df[metr] = map(df[metr], ~ na_if(., 0))
-=======
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 }
 summary(df[metr]) 
 
 
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 # Create nominal variables for all metric variables (for linear models) before imputing -------------------------------
 
 metr_binned = paste0(metr,"_BINNED_")
@@ -141,13 +120,8 @@ df[metr_binned] = map(df[metr_binned], ~ fct_explicit_na(., na_level = "(Missing
 summary(df[metr_binned],11)
 
 # Remove binned variables with just 1 bin
-<<<<<<< HEAD
 #(onebin = metr_binned[map_lgl(metr_binned, ~ length(levels(df[[.]])) == 1)])
 #metr_binned = setdiff(metr_binned, onebin)
-=======
-onebin = metr_binned[map_lgl(metr_binned, ~ length(levels(df[[.]])) == 1)]
-metr_binned = setdiff(metr_binned, onebin)
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 
 
 
@@ -159,20 +133,13 @@ misspct = map_dbl(df[metr], ~ round(sum(is.na(.)/nrow(df)), 3)) #misssing percen
 misspct[order(misspct, decreasing = TRUE)] #view in descending order
 (remove = names(misspct[misspct > 0.99])) 
 metr = setdiff(metr, remove)
-<<<<<<< HEAD
 metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_"))
-=======
-misspct = misspct[setdiff(names(misspct), remove)]
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
+
 summary(df[metr]) 
 
 # Check for outliers and skewness
 #options(warn = -1)
-<<<<<<< HEAD
 plots = suppressMessages(get_plot_distr_metr(df, metr, color = color, missinfo = misspct, ylim = ylim))
-=======
-plots = suppressMessages(get_plot_distr_metr(df, metr, color = color, missinfo = misspct))
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 ggsave(paste0(plotloc, TYPE, "_distr_metr.pdf"), 
        marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 18, height = 12)
 #options(warn = 0)
@@ -182,11 +149,7 @@ df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99))
 
 # Log-Transform
 if (TYPE == "class") tolog = c("fare")
-<<<<<<< HEAD
 if (TYPE %in% c("regr","multiclass")) tolog = c("Lot_Area","BsmtFin_SF_1")
-=======
-if (TYPE %in% c("regr","multiclass")) tolog = c("Lot_Area")
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
 metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
 names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt misspct and keep order
@@ -197,11 +160,9 @@ names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"
 # Final variable information --------------------------------------------------------------------------------------------
 
 # Univariate variable importance
-<<<<<<< HEAD
 (varimp_metr = (filterVarImp(df[metr], df$target, nonpara = TRUE) %>% rowMeans() %>% 
                  .[order(., decreasing = TRUE)] %>% round(2)))
-(varimp_metr_binned = (filterVarImp(df[metr_binned], df$target, nonpara = TRUE) %>% rowMeans() %>% 
-                 .[order(., decreasing = TRUE)] %>% round(2)))
+
 # Plot 
 plots1 = suppressMessages(get_plot_distr_metr(df, metr, color = color, 
                                              missinfo = misspct, varimpinfo = varimp_metr, ylim = ylim))
@@ -381,13 +342,6 @@ setdiff(predictors_binned, colnames(df))
 rm(df.orig)
 rm(plots)
 save.image(paste0(TYPE,"_1_explore.rdata"))
-=======
-varimp = filterVarImp(df[metr], df$target, nonpara = TRUE) %>% rowMeans()
-varimp[order(varimp, decreasing = TRUE)]
 
-# Plot 
-plots = suppressMessages(get_plot_distr_metr(df, metr, color = color, missinfo = misspct, varimpinfo = varimp))
-ggsave(paste0(plotloc, TYPE, "_distr_metr_final.pdf"), 
-       marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 18, height = 12)
 
->>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
+
