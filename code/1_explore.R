@@ -16,7 +16,7 @@ skip = function() {
 source("./code/0_init.R")
 
 # Adapt some parameter -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-color = switch(TYPE, "class" = twocol, "regr" = hexcol, "multiclass" = fourcol)
+color = switch(TYPE, "class" = rev(twocol), "regr" = hexcol, "multiclass" = fourcol)
 cutoff = switch(TYPE, "class" = 0.1, "regr"  = 0.9, "multiclass" = 0.9)
 ylim = switch(TYPE, "class" = NULL, "regr"  = c(0,2.5e5), "multiclass" = c(0,2.5e5))
 plotloc = paste0(plotloc,TYPE,"/")
@@ -82,7 +82,7 @@ summary(df$target)
 # Train/Test fold: usually split by time
 df$fold = factor("train", levels = c("train", "test"))
 set.seed(123)
-df[sample(1:nrow(df), floor(0.3*nrow(df))),"fold"] = "test"
+df[sample(1:nrow(df), floor(0.3*nrow(df))),"fold"] = "test" #70/30 split
 summary(df$fold)
 
 
@@ -100,19 +100,19 @@ if (TYPE %in% c("regr","multiclass")) {
          "Bsmt_Unf_SF","Total_Bsmt_SF","first_Flr_SF","second_Flr_SF","Low_Qual_Fin_SF","Gr_Liv_Area",
          "Garage_Yr_Blt","Garage_Area","Wood_Deck_SF","Open_Porch_SF","Enclosed_Porch","threeSsn_Porch","Screen_Porch",
          "Pool_Area","Misc_Val") 
-  df[metr] = map(df[metr], ~ na_if(., 0))
+  df[metr] = map(df[metr], ~ na_if(., 0)) #zeros are always missing here
 }
 summary(df[metr]) 
 
 
 
 
-# Create nominal variables for all metric variables (for linear models) before imputing -------------------------------
+# Create nominal variables for all metric variables (for linear models)  -------------------------------
 
 metr_binned = paste0(metr,"_BINNED_")
 df[metr_binned] = map(df[metr], ~ {
-  # Adapt sequence increment in case you have lots of data 
-  cut(., unique(quantile(., seq(0, 1, 0.1), na.rm = TRUE)), include.lowest = TRUE)
+  # Hint: Adapt sequence increment in case you have lots of data 
+  cut(., unique(quantile(., seq(0, 1, 0.1), na.rm = TRUE)), include.lowest = TRUE)  
 })
 
 # Convert missings to own level ("(Missing)")
@@ -131,82 +131,88 @@ summary(df[metr_binned],11)
 # Remove covariates with too many missings from metr 
 misspct = map_dbl(df[metr], ~ round(sum(is.na(.)/nrow(df)), 3)) #misssing percentage
 misspct[order(misspct, decreasing = TRUE)] #view in descending order
-(remove = names(misspct[misspct > 0.99])) 
-metr = setdiff(metr, remove)
-metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_"))
-
-summary(df[metr]) 
+(remove = names(misspct[misspct > 0.99])) #remove
+metr = setdiff(metr, remove) #adapt metadata
+metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_")) #keep "binned" version in sync
 
 # Check for outliers and skewness
-#options(warn = -1)
+summary(df[metr]) 
+options(warn = -1)
 plots = suppressMessages(get_plot_distr_metr(df, metr, color = color, missinfo = misspct, ylim = ylim))
 ggsave(paste0(plotloc, TYPE, "_distr_metr.pdf"), 
        marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 18, height = 12)
-#options(warn = 0)
+options(warn = 0)
 
 # Winsorize
-df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99))
+df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99)) #hint: one might want to plot again before decising for log-trafo
 
 # Log-Transform
 if (TYPE == "class") tolog = c("fare")
-if (TYPE %in% c("regr","multiclass")) tolog = c("Lot_Area","BsmtFin_SF_1")
+if (TYPE %in% c("regr","multiclass")) tolog = c("Lot_Area","Open_Porch_SF","Misc_Val")
 df[paste0(tolog,"_LOG_")] = map(df[tolog], ~ {if(min(., na.rm=TRUE) == 0) log(.+1) else log(.)})
-metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metr and keep order
-names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt misspct and keep order
+metr = map_chr(metr, ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #adapt metadata (keep order)
+names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"), .)) #keep misspct in sync
 
 
 
 
 # Final variable information --------------------------------------------------------------------------------------------
 
-# Univariate variable importance
+# Univariate variable importance: ONLY for non-missing observations -> need to consider also NA-percentage!
 (varimp_metr = (filterVarImp(df[metr], df$target, nonpara = TRUE) %>% rowMeans() %>% 
                  .[order(., decreasing = TRUE)] %>% round(2)))
 
 # Plot 
+options(warn = -1)
 plots1 = suppressMessages(get_plot_distr_metr(df, metr, color = color, 
                                              missinfo = misspct, varimpinfo = varimp_metr, ylim = ylim))
-plots2 = get_plot_distr_nomi(df, metr_binned, color = color, 
-                             varimpinfo = varimp_metr_binned, min_width = 0.1, ylim = ylim)
-plots = list() ; for(i in 1:length(plots1)) {plots = c(plots, plots1[i], plots2[i])}
+plots2 = suppressMessages(get_plot_distr_nomi(df, metr_binned, color = color, varimpinfo = NULL, inner_barplot = FALSE,
+                                              min_width = 0.2, ylim = ylim))
+plots = list() ; for (i in 1:length(plots1)) {plots = c(plots, plots1[i], plots2[i])} #zip plots
 ggsave(paste0(plotloc, TYPE, "_distr_metr_final.pdf"), 
        marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 24, height = 18)
+options(warn = 0)
+
+
 
 
 # Removing variables -------------------------------------------------------------------------------------------
 
-# Remove Self predictors
+# Remove Self features
 metr = setdiff(metr, "xxx")
 
 # Remove highly/perfectly (>=98%) correlated (the ones with less NA!)
 summary(df[metr])
 plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = cutoff)
 ggsave(paste0(plotloc, TYPE, "_corr_metr.pdf"), plot, width = 9, height = 9)
-metr = setdiff(metr, c("xxx")) #Put at xxx the variables to remove
-metr_binned = setdiff(metr_binned, paste0(c("xxx"),"_BINNED_")) #Put at xxx the variables to remove
+remove = c("xxx") #put at xxx the variables to remove
+metr = setdiff(metr, c("xxx")) #remove
+metr_binned = setdiff(metr_binned, paste0(c("xxx"),"_BINNED_")) #keep "binned" version in sync
 
 
 
 
 # Time/fold depedency --------------------------------------------------------------------------------------------
 
-# IN case of having a detailed date variable this can used as regression target here as well!
+# Hint: In case of having a detailed date variable this can be used as regression target here as well!
 
-# Univariate variable importance
+# Univariate variable importance (again ONLY for non-missing observations!)
 df$fold_test = factor(ifelse(df$fold == "test", "Y", "N"))
 (varimp_metr_fold = filterVarImp(df[metr], df$fold_test, nonpara = TRUE) %>% rowMeans() %>%
     .[order(., decreasing = TRUE)] %>% round(2))
 
-# Plot 
+# Plot (Hint: one might want to filter just on variable importance with highest importance)
+options(warn = -1)
 plots = get_plot_distr_metr(df, metr, color = twocol, target_name = "fold_test", 
                             missinfo = misspct, varimpinfo = varimp_metr_fold, ylim = ylim)
 ggsave(paste0(plotloc, TYPE, "_distr_metr_final_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        width = 18, height = 12)
+options(warn = 0)
 
 
 
 
-# Missing indicator and Imputation ----------------------------------------------------------------------------------
+# Missing indicator and imputation (must be done at the end of all processing)-----------------------------------------
 
 # Create mising indicators
 (miss = metr[map_lgl(df[metr], ~ any(is.na(.)))])
@@ -216,8 +222,8 @@ summary(df[,paste0("MISS_",miss)])
 # Impute missings with randomly sampled value (or median, see below)
 df[miss] = map(df[miss], ~ {
   i.na = which(is.na(.x))
-  .x[i.na] = sample(.x[-i.na], length(i.na) , replace = TRUE)
-  #.x[i.na] = median(.x[-i.na], na.rm = TRUE) #median imputation
+  .x[i.na] = sample(.x[-i.na], length(i.na) , replace = TRUE) #random imputation: better for interpretation
+  #.x[i.na] = median(.x[-i.na], na.rm = TRUE) #median imputation: better in case of scoring
   .x }
 )
 summary(df[metr]) 
@@ -242,8 +248,8 @@ if (TYPE %in% c("regr","multiclass")) {
            "Garage_Cars","Garage_Qual","Garage_Cond","Paved_Drive","Pool_QC","Fence","Misc_Feature","Mo_Sold","Yr_Sold",
            "Sale_Type","Sale_Condition") 
 }
-nomi = union(nomi, paste0("MISS_",miss)) #Add missing indicators
-df[nomi] = map(df[nomi], ~ as.factor(as.character(.)))
+nomi = union(nomi, paste0("MISS_",miss)) #add missing indicators
+df[nomi] = map(df[nomi], ~ as.factor(as.character(.))) #map to factor
 summary(df[nomi])
 
 
@@ -264,12 +270,12 @@ df[ord] =  map(df[ord], ~ fct_relevel(., levels(.)[order(as.numeric(levels(.)), 
 
 # Create compact covariates for "too many members" columns 
 topn_toomany = 10
-levinfo = map_int(df[nomi], ~ length(levels(.))) 
-levinfo[order(levinfo, decreasing = TRUE)]
+levinfo = map_int(df[nomi], ~ length(levels(.))) #number of levels
+levinfo[order(levinfo, decreasing = TRUE)] #print in descending order
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
-(toomany = setdiff(toomany, c("xxx"))) #Set exception for important variables
+(toomany = setdiff(toomany, c("xxx"))) #set exception for important variables
 df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, other_level = "_OTHER_")) #collapse
-nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #Adapt nomi and keep order
+nomi = map_chr(nomi, ~ ifelse(. %in% toomany, paste0(.,"_OTHER_"), .)) #adapt metadata (keep order)
 summary(df[nomi], topn_toomany + 2)
 
 # Univariate variable importance
@@ -278,7 +284,8 @@ summary(df[nomi], topn_toomany + 2)
 
 
 # Check
-plots = get_plot_distr_nomi(df, nomi, color = color, varimpinfo = varimp_nomi, min_width = 0.1, ylim = ylim)
+plots = suppressMessages(get_plot_distr_nomi(df, nomi, color = color, varimpinfo = varimp_nomi, inner_barplot = TRUE,
+                                             min_width = 0.2, ylim = ylim))
 ggsave(paste0(plotloc,TYPE,"_distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
 
@@ -287,28 +294,29 @@ ggsave(paste0(plotloc,TYPE,"_distr_nomi.pdf"), marrangeGrob(plots, ncol = 4, nro
 
 # Removing variables ----------------------------------------------------------------------------------------------
 
-# Remove Self-predictors
+# Remove Self-features
 if (TYPE == "class") nomi = setdiff(nomi, "boat_OTHER_")
 if (TYPE %in% c("regr","multiclass")) nomi = setdiff(nomi, "xxx")
 
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = cutoff, textcol = "white")
 ggsave(paste0(plotloc,TYPE,"_corr_nomi.pdf"), plot, width = 14, height = 14)
-nomi = setdiff(nomi, "xxx")
+nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_SF","MISS_Misc_Val_LOG_",
+                       "MISS_Mas_Vnr_Area","MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Total_Bsmt_SF"))
 
 
 
 
 # Time/fold depedency --------------------------------------------------------------------------------------------
 
-# IN case of having a detailed date variable this can used as regression target here as well!
+# Hint: In case of having a detailed date variable this can be used as regression target here as well!
 
 # Univariate variable importance
 (varimp_nomi_fold = filterVarImp(df[nomi], df$fold_test, nonpara = TRUE) %>% rowMeans() %>% 
    .[order(., decreasing = TRUE)] %>% round(2))
 
-# Check
-plots = get_plot_distr_nomi(df, nomi, color = twocol, target_name = "fold_test", 
+# Plot (Hint: one might want to filter just on variable importance with highest importance)
+plots = get_plot_distr_nomi(df, nomi, color = twocol, target_name = "fold_test", inner_barplot = FALSE,
                             varimpinfo = varimp_nomi_fold, ylim = ylim)
 ggsave(paste0(plotloc,TYPE,"_distr_nomi_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
@@ -320,20 +328,20 @@ ggsave(paste0(plotloc,TYPE,"_distr_nomi_folddependency.pdf"), marrangeGrob(plots
 #|||| Prepare final data ||||----
 #######################################################################################################################-
 
-# Define final predictors ----------------------------------------------------------------------------------------
+# Define final features ----------------------------------------------------------------------------------------
 
-predictors = c(metr, nomi)
-formula = as.formula(paste("target", "~", paste(predictors, collapse = " + ")))
-formula_rightside = as.formula(paste("~", paste(predictors, collapse = " + ")))
-predictors_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
-formula_binned = as.formula(paste("target", "~", paste(predictors_binned, collapse = " + ")))
-formula_binned_rightside = as.formula(paste("~", paste(predictors_binned, collapse = " + ")))
+features = c(metr, nomi)
+formula = as.formula(paste("target", "~", paste(features, collapse = " + ")))
+formula_rightside = as.formula(paste("~", paste(features, collapse = " + ")))
+features_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
+formula_binned = as.formula(paste("target", "~", paste(features_binned, collapse = " + ")))
+formula_binned_rightside = as.formula(paste("~", paste(features_binned, collapse = " + ")))
 
 # Check
-summary(df[predictors])
-setdiff(predictors, colnames(df))
-summary(df[predictors_binned])
-setdiff(predictors_binned, colnames(df))
+summary(df[features])
+setdiff(features, colnames(df))
+summary(df[features_binned])
+setdiff(features_binned, colnames(df))
 
 
 
