@@ -106,6 +106,47 @@ grid.draw.arrangelist <- function(x, ...) {
   }
 }
 
+<<<<<<< HEAD
+=======
+
+# Winsorize
+winsorize = function(variable, lower = NULL, upper = NULL) {
+  if (!is.null(lower)) {
+    q_lower = quantile(variable, lower, na.rm = TRUE)
+    variable[variable < q_lower] = q_lower
+  }
+  if (!is.null(upper)) {
+    q_upper = quantile(variable, upper, na.rm = TRUE)
+    variable[variable > q_upper] = q_upper
+  }
+  variable
+}
+
+
+# Custom summary function for classification performance (use by caret)
+mysummary_class = function(data, lev = NULL, model = NULL) 
+{
+  #browser()
+  
+  # Get y and yhat ("else" is default caret behavior)
+  if ("y" %in% colnames(data)) y = data$y else y = data$obs 
+  if ("yhat" %in% colnames(data)) yhat = data$yhat else yhat = data[[levels(y)[[2]]]]
+
+  conf_obj = caret::confusionMatrix(factor(ifelse(yhat > 0.5,"Y","N"), levels = levels(y)), y)
+  accuracy = as.numeric(conf_obj$overall["Accuracy"])
+  missclassification = 1 - accuracy
+  
+  if (is.numeric(yhat)) { #Fix for change in caret and parallel processing
+    pred_obj = ROCR::prediction(yhat, y)
+    auc = ROCR::performance(pred_obj, "auc" )@y.values[[1]]
+  } else {
+    auc = 0
+  }
+  
+  out = c("auc" = auc, "accuracy" = accuracy, "missclassification" = missclassification)
+  out
+}
+>>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
 
 
 ## Winsorize
@@ -129,6 +170,7 @@ mysummary = function(data, lev = NULL, model = NULL)
   #browser()
   # Adapt target observations
   if ("y" %in% colnames(data)) data$obs = data$y
+<<<<<<< HEAD
   
   # Switch colnames in case of classification
   colnames(data) = gsub("yhat.","",colnames(data))
@@ -166,6 +208,52 @@ mysummary = function(data, lev = NULL, model = NULL)
     stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
     names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
   } 
+=======
+  if (!("pred" %in% colnames(data))) data$pred = factor(levels(data$obs)[apply(data[levels(data$obs)], 1, 
+                                                                               function(x) which.max(x))], 
+                                                        levels = levels(data$obs))
+  #browser()
+  if (!all(levels(data[, "pred"]) == levels(data[, "obs"]))) stop("levels of observed and predicted data do not match")
+  
+  # Logloss stats
+  if (is.null(lev)) lev = levels(data$obs)
+  lloss <- mnLogLoss(data = data, lev = lev, model = model)
+  
+  # AUC stats
+  prob_stats <- lapply(levels(data[, "pred"]), function(x) {
+    obs <- ifelse(data[, "obs"] == x, 1, 0)
+    prob <- data[, x]
+    AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    AUCs = max(AUCs, 1 - AUCs)
+    return(AUCs)
+  })
+  roc_stats <- c("Mean_AUC" = mean(unlist(prob_stats)), 
+                 "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
+  
+  # confusion Matrix stats
+  CM <- confusionMatrix(data[, "pred"], data[, "obs"])
+  class_stats <- CM$byClass
+  if (!is.null(dim(class_stats))) class_stats = colMeans(class_stats)
+  names(class_stats) <- paste0("Mean_", names(class_stats))
+  
+  # Collect metrics
+  stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
+  names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+  return(stats)
+  
+}
+
+
+
+  
+
+# Get plot list of metric variables vs regression target 
+get_plot_distr_metr_regr = function(df.plot = df, vars = metr, target_name = "target", missinfo = NULL, 
+                                    varimpinfo = NULL, nbins = 50, color = hexcol, ylim = NULL, 
+                                    legend_only_in_1stplot = FALSE) {
+
+  df.plot$dummy = "dummy"
+>>>>>>> 387be99c103c937a7d1ba47d7103e1ac98cff94b
   
   
   ## Regression
