@@ -20,6 +20,7 @@ library(lubridate)
 library(bindrcpp)
 library(magrittr)
 library(scales)
+library(zeallot)
 
 library(doParallel)
 # 
@@ -90,8 +91,10 @@ theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
 ## ... possibly exponentiate for regression 
 scale_pred = function(yhat, b_sample = NULL, b_all = NULL) {
   if (is.null(dim(yhat))) {
+    # Regression
     yhat
   } else {
+    # Classification
     as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
   }
 }
@@ -121,6 +124,30 @@ winsorize = function(variable, lower = NULL, upper = NULL) {
   variable
 }
 
+
+
+## Impute
+impute = function(variable, type = "random") {
+  i.na = which(is.na(variable))
+  if (length(i.na)) {
+    # Random imputation: better for interpretation
+    if (type == "random") variable[i.na] = sample(variable[-i.na], length(i.na) , replace = TRUE) 
+    # Median imputation: better in case of scoring
+    variable[i.na] = median(variable[-i.na], na.rm = TRUE) 
+  }
+  variable 
+}
+
+## Undersample
+undersample_n = function(df, target_name = "target", n_maxpersample) {
+  #browser()
+  i.samp = unlist(map(levels(df[[target_name]]), ~ {
+    which(df[[target_name]] == .x) %>% sample(min(length(.), n_maxpersample))
+  }))
+  list(df = df[i.samp,], 
+       b_sample = df[[target_name]][i.samp] %>% (function(.) summary(.)/length(.)), 
+       b_all = df[[target_name]] %>% (function(.) summary(.)/length(.)))
+}
 
 
 ## Custom summary function for classification performance (use by caret)
@@ -193,8 +220,8 @@ mysummary = function(data, lev = NULL, model = NULL)
     absres = abs(res) #absolute residual
     
     # Derive stats
-    spear = cor(yhat, y, method = "spearman")
-    pear = cor(yhat, y, method = "pearson")
+    spearman = cor(yhat, y, method = "spearman")
+    pearson = cor(yhat, y, method = "pearson")
     IqrE = IQR(res)
     AUC = concord(yhat, y)
     MAE = mean(absres)
@@ -207,7 +234,7 @@ mysummary = function(data, lev = NULL, model = NULL)
     MdRAE = median(absres / abs(y - mean(y)))
     
     # Collect metrics
-    stats = c(spear, pear, IqrE, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
+    stats = c(spearman, pearson, IqrE, AUC, MAE, MdAE, MAPE, MdAPE, sMAPE, sMdAPE, MRAE, MdRAE)
     names(stats) = c("spearman","pearson","IqrE","AUC", "MAE", "MdAE", "MAPE", "MdAPE", "sMAPE", "sMdAPE", "MRAE", "MdRAE")
   }
   stats
@@ -526,7 +553,7 @@ get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutof
     scale_y_discrete(limits = rownames(m.corr)) +
     scale_color_manual(values = c("black", textcol)) +
     guides(color = FALSE) +
-    labs(title = paste0(if (input_type == "metr") paste0(method," Correlation") else "Contig.Coef",
+    labs(title = paste0(if (input_type == "metr") paste0("abs. ",method," Correlation") else "Contig.Coef",
                         " (cutoff = ", cutoff, ")"), 
          fill = "", x = "", y = "") +
     theme_my + theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
@@ -1239,69 +1266,47 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 # Variable importance by permutation argument 
 get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, dmatrix = TRUE,
                                      feature_names = features, target_name = "target",
-                                     vars = features,  metric = "auc") {
+                                     b_sample = NULL, b_all = NULL,
+                                     vars = features,  metric = "AUC") {
   
-  # Original performance
-  if (is.factor(df.for_varimp[[target_name]])) {
-    if (!dmatrix) {
-      yhat = predict(fit.for_varimp, df.for_varimp[feature_names])
-    } else {
-      options(na.action = "na.pass")
-      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
-                                                       data = df.for_varimp[feature_names]))
-      options(na.action = "na.omit")
-      yhat = predict(fit.for_varimp, dm.for_varimp, type = "prob")
-    }
-    perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], 
-                                     as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
+  #browser()
+  
+  ## Original performance
+  if (is.factor(df.for_varimp[[target_name]])) type = "prob" else type = "raw"
+  if (!dmatrix) {
+    yhat_unscaled = predict(fit.for_varimp, df.for_varimp[feature_names])
   } else {
-    if (!dmatrix) {
-      yhat = predict(fit.for_varimp, df.for_varimp[feature_names])
-    } else {
-      options(na.action = "na.pass")
-      dm.for_varimp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
-                                                       data = df.for_varimp[feature_names]))
-      options(na.action = "na.omit")
-      yhat = predict(fit.for_varimp, dm.for_varimp)
-    }
-    perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]
+    formula_tmp = as.formula(paste("~", paste(feature_names, collapse = " + "))) 
+    yhat_unscaled = predict(fit.for_varimp, 
+                            xgb.DMatrix(sparse.model.matrix(formula_tmp, data = df.for_varimp[feature_names])), 
+                            type = type)
   }
+  perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], 
+                                   yhat = scale_pred(yhat_unscaled, b_sample, b_all)))[metric]
   
-  # Permute
+  
+  ## Performance for permuted variables
   set.seed(999)
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
-  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"), 
-                      .export = c("mysummary", "b_sample", "b_all")) %dopar% 
+  df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, 
+                      .packages = c("caret","xgboost","Matrix","dplyr"), 
+                      .export = c("mysummary","scale_pred")) %dopar% 
   { 
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    if (is.factor(df.for_varimp[[target_name]])) {
-      if (!dmatrix) {
-        yhat = predict(fit.for_varimp, df.tmp[feature_names], type = "prob")
-      } else {
-        options(na.action = "na.pass")
-        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
-                                                  data = df.tmp[feature_names]))
-        options(na.action = "na.omit")
-        yhat = predict(fit.for_varimp, dm.tmp, type = "prob")
-      }
-      perf = mysummary(data.frame(y = df.for_varimp[[target_name]], 
-                                  as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))))[metric]
+    if (!dmatrix) {
+      yhat_unscaled = predict(fit.for_varimp, df.tmp[feature_names])
     } else {
-      if (!dmatrix) {
-        yhat = predict(fit.for_varimp, df.tmp[feature_names])
-      } else {
-        options(na.action = "na.pass")
-        dm.tmp =  xgb.DMatrix(sparse.model.matrix(as.formula(paste("~", paste(feature_names, collapse = " + "))), 
-                                                  data = df.tmp[feature_names]))
-        options(na.action = "na.omit")
-        yhat = predict(fit.for_varimp, dm.tmp)
-      }        
-      perf = mysummary(data.frame(y = df.for_varimp[[target_name]], yhat = yhat))[metric]  #performance
+      yhat_unscaled = predict(fit.for_varimp, 
+                              xgb.DMatrix(sparse.model.matrix(formula_tmp, data = df.tmp[feature_names])), 
+                              type = type)
     }
-    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) #performance diff
+    perf = mysummary(data.frame(y = df.tmp[[target_name]], 
+                                yhat = scale_pred(yhat_unscaled, b_sample, b_all)))[metric]
+    # Performance difference
+    data.frame(variable = vars[i], perfdiff = max(0, perf_orig - perf), stringsAsFactors = FALSE) 
   }
   print(Sys.time() - start)
   

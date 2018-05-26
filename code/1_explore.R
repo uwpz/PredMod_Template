@@ -1,3 +1,4 @@
+#TODO: function impute, varimp_impute
 
 skip = function() {
   # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
@@ -15,7 +16,7 @@ skip = function() {
 # Load libraries and functions
 source("./code/0_init.R")
 
-# Adapt some parameter -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
+# Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 color = switch(TYPE, "class" = rev(twocol), "regr" = hexcol, "multiclass" = fourcol)
 cutoff = switch(TYPE, "class" = 0.1, "regr"  = 0.9, "multiclass" = 0.9)
 ylim = switch(TYPE, "class" = NULL, "regr"  = c(0,2.5e5), "multiclass" = c(0,2.5e5))
@@ -131,7 +132,7 @@ summary(df[metr_binned],11)
 # Remove covariates with too many missings from metr 
 misspct = map_dbl(df[metr], ~ round(sum(is.na(.)/nrow(df)), 3)) #misssing percentage
 misspct[order(misspct, decreasing = TRUE)] #view in descending order
-(remove = names(misspct[misspct > 0.99])) #remove
+(remove = names(misspct[misspct > 0.99])) #vars to remove
 metr = setdiff(metr, remove) #adapt metadata
 metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_")) #keep "binned" version in sync
 
@@ -144,7 +145,7 @@ ggsave(paste0(plotloc, TYPE, "_distr_metr.pdf"),
 options(warn = 0)
 
 # Winsorize
-df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99)) #hint: one might want to plot again before decising for log-trafo
+df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99)) #hint: one might want to plot again before deciding for log-trafo
 
 # Log-Transform
 if (TYPE == "class") tolog = c("fare")
@@ -161,6 +162,8 @@ names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"
 # Univariate variable importance: ONLY for non-missing observations -> need to consider also NA-percentage!
 (varimp_metr = (filterVarImp(df[metr], df$target, nonpara = TRUE) %>% rowMeans() %>% 
                  .[order(., decreasing = TRUE)] %>% round(2)))
+(varimp_metr_imputed = (filterVarImp(map_df(df[metr], ~ impute(.)), df$target, nonpara = TRUE) %>% rowMeans() %>% 
+                           .[order(., decreasing = TRUE)] %>% round(2)))
 
 # Plot 
 options(warn = -1)
@@ -201,9 +204,10 @@ df$fold_test = factor(ifelse(df$fold == "test", "Y", "N"))
 (varimp_metr_fold = filterVarImp(df[metr], df$fold_test, nonpara = TRUE) %>% rowMeans() %>%
     .[order(., decreasing = TRUE)] %>% round(2))
 
-# Plot (Hint: one might want to filter just on variable importance with highest importance)
+# Plot: only variables with with highest importance
+metr_toprint = names(varimp_metr_fold)[varimp_metr_fold >= 0.52]
 options(warn = -1)
-plots = get_plot_distr_metr(df, metr, color = twocol, target_name = "fold_test", 
+plots = get_plot_distr_metr(df, metr_toprint, color = twocol, target_name = "fold_test", 
                             missinfo = misspct, varimpinfo = varimp_metr_fold, ylim = ylim)
 ggsave(paste0(plotloc, TYPE, "_distr_metr_final_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        width = 18, height = 12)
@@ -220,14 +224,8 @@ df[paste0("MISS_",miss)] = map(df[miss], ~ as.factor(ifelse(is.na(.x), "miss", "
 summary(df[,paste0("MISS_",miss)])
 
 # Impute missings with randomly sampled value (or median, see below)
-df[miss] = map(df[miss], ~ {
-  i.na = which(is.na(.x))
-  .x[i.na] = sample(.x[-i.na], length(i.na) , replace = TRUE) #random imputation: better for interpretation
-  #.x[i.na] = median(.x[-i.na], na.rm = TRUE) #median imputation: better in case of scoring
-  .x }
-)
+df[miss] = map(df[miss], ~ impute(., type = "random"))
 summary(df[metr]) 
-
 
 
 
@@ -270,8 +268,7 @@ df[ord] =  map(df[ord], ~ fct_relevel(., levels(.)[order(as.numeric(levels(.)), 
 
 # Create compact covariates for "too many members" columns 
 topn_toomany = 10
-levinfo = map_int(df[nomi], ~ length(levels(.))) #number of levels
-levinfo[order(levinfo, decreasing = TRUE)] #print in descending order
+(levinfo = map_int(df[nomi], ~ length(levels(.))) %>% .[order(., decreasing = TRUE)]) #number of levels
 (toomany = names(levinfo)[which(levinfo > topn_toomany)])
 (toomany = setdiff(toomany, c("xxx"))) #set exception for important variables
 df[paste0(toomany,"_OTHER_")] = map(df[toomany], ~ fct_lump(., topn_toomany, other_level = "_OTHER_")) #collapse
@@ -301,8 +298,10 @@ if (TYPE %in% c("regr","multiclass")) nomi = setdiff(nomi, "xxx")
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = cutoff, textcol = "white")
 ggsave(paste0(plotloc,TYPE,"_corr_nomi.pdf"), plot, width = 14, height = 14)
-nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_SF","MISS_Misc_Val_LOG_",
-                       "MISS_Mas_Vnr_Area","MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Total_Bsmt_SF"))
+if (TYPE %in% c("regr","multiclass")) {
+  nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_SF","MISS_Misc_Val_LOG_",
+                        "MISS_Mas_Vnr_Area","MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Total_Bsmt_SF"))
+}
 
 
 
@@ -316,7 +315,8 @@ nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_
    .[order(., decreasing = TRUE)] %>% round(2))
 
 # Plot (Hint: one might want to filter just on variable importance with highest importance)
-plots = get_plot_distr_nomi(df, nomi, color = twocol, target_name = "fold_test", inner_barplot = FALSE,
+nomi_toprint = names(varimp_nomi_fold)[varimp_nomi_fold >= 0.52]
+plots = get_plot_distr_nomi(df, nomi_toprint, color = twocol, target_name = "fold_test", inner_barplot = FALSE,
                             varimpinfo = varimp_nomi_fold, ylim = ylim)
 ggsave(paste0(plotloc,TYPE,"_distr_nomi_folddependency.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)

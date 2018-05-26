@@ -16,18 +16,15 @@ load(paste0(TYPE,"_1_explore.rdata"))
 # Load libraries and functions
 source("./code/0_init.R")
 
-
-# Adapt some parameter -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
+# Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob")
-colors = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol)
+color = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol)
 ylim1 = switch(TYPE, "class" = c(-1,1), "regr"  = NULL, "multiclass" = c(-1,1))
 ylim2 = switch(TYPE, "class" = c(0,1), "regr"  = NULL, "multiclass" = c(0,1))
 ylim3 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.2,0.7))
-target_name = switch(TYPE, "class" = "target", "regr"  = "target", "multiclass" = "target_onelev")
-b_sample = switch(TYPE, "regr" = NULL)
-b_all = b_sample
-plotloc = paste0(plotloc,TYPE,"/")
+#target_name = switch(TYPE, "class" = "target", "regr"  = "target", "multiclass" = "target_onelev")
 
+plotloc = paste0(plotloc,TYPE,"/")
 
 # Initialize parallel processing
 closeAllConnections() #reset
@@ -37,30 +34,23 @@ registerDoParallel(cl)
 # stopCluster(cl); closeAllConnections() #stop cluster
 
 
+
 ## Tuning parameter to use
 tunepar = expand.grid(nrounds = 100, max_depth = 6, 
                       eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
                       min_child_weight = 5, subsample = 0.7)
 
 
+
+
 # Sample data --------------------------------------------------------------------------------------------
 
 # Training data
 if (TYPE %in% c("class","multiclass")) {
-  # Just take data from train fold
-  n_maxpersample = 400 #Take all but n_maxpersample at most
+  # Just take data from train fold (take all but n_maxpersample at most)
   summary(df[df$fold == "train", "target"])
-  df.train = c()
-  for (i in 1:length(levels(df$target))) {
-    i.samp = which(df$fold == "train" & df$target == levels(df$target)[i])
-    set.seed(i*123)
-    df.train = bind_rows(df.train, df[sample(i.samp, min(n_maxpersample, length(i.samp))),]) 
-  }
-  summary(df.train$target)
-  
-  # Define prior base probabilities (needed to correctly switch probabilities of undersampled data)
-  (b_all = df$target[df$fold == "train"] %>% (function(.) {summary(.)/length(.)}))
-  (b_sample = df.train$target %>% (function(.) {summary(.)/length(.)}))
+  c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 500)) 
+  summary(df.train$target); b_sample; b_all
   
   # Set metric for peformance comparison
   metric = "AUC"
@@ -68,7 +58,7 @@ if (TYPE %in% c("class","multiclass")) {
 if (TYPE == "regr") {
   # Just take data from train fold
   df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
-  
+
   # Set metric for peformance comparison
   metric = "spearman"
 }
@@ -87,21 +77,21 @@ df.test = df %>% filter(fold == "test")
 
 # Fit
 tmp = Sys.time()
-fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[predictors])), df.train$target,
-#fit = train(formula, data = df.train[c("target",predictors)],
+fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), df.train$target,
+#fit = train(formula, data = df.train[c("target",features)],
             trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
             method = "xgbTree", 
             tuneGrid = tunepar)
 Sys.time() - tmp
 
 # Predict
-yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
+yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[features])),
                              type = type)
 summary(yhat_test_unscaled)
 # # Scoring in chunks in parallel in case of high memory consumption of xgboost
-# l.split = split(df.test[predictors], (1:nrow(df.test)) %/% 50000)
+# l.split = split(df.test[features], (1:nrow(df.test)) %/% 50000)
 # yhat_test_unscaled = foreach(df.split = l.split, .combine = bind_rows) %dopar% {
-#   predict(fit, df.split, type = "prob")
+#   predict(fit, xgb.DMatrix(sparse.model.matrix(formula, df.split)), type = type)
 # }
 
 # Rescale 
@@ -110,7 +100,7 @@ y_test = df.test$target
 
 # Plot performance
 mysummary(data.frame(y = y_test, yhat = yhat_test))
-plots = get_plot_performance(yhat = yhat_test, y = y_test, reduce_factor = NULL, colors = colors)
+plots = get_plot_performance(yhat = yhat_test, y = y_test, reduce_factor = NULL, colors = color)
 ggsave(paste0(plotloc,TYPE,"_performance.pdf"), marrangeGrob(plots, ncol = length(plots)/2, nrow = 2, top = NULL), 
        w = 18, h = 12)
 
@@ -119,22 +109,33 @@ ggsave(paste0(plotloc,TYPE,"_performance.pdf"), marrangeGrob(plots, ncol = lengt
 
 #---- Check residuals ----------------------------------------------------------------------------------
 
-# Residuals
-#TODO: Derive the following correctly
-if (TYPE %in% c("class","multiclass")) df.test$residual = ifelse(y_test == levels(y_test)[2], 1, 0) - yhat_test[,2]
+## Residuals
+if (TYPE == "class") df.test$residual = ifelse(y_test == levels(y_test)[2], 1, 0) - yhat_test[,2]
+if (TYPE == "multiclass") {
+  # Decide for a reference member
+  levels(y_test)
+  k = 2
+  df.test$residual = ifelse(y_test == levels(y_test)[k], 1, 0) - yhat_test[,k]
+  # Alternative: dynamic refernce member per obs, i.e. the true label
+  #df.test$residual = 1 - rowSums(yhat_test * model.matrix(~ -1 + y_test, data.frame(y_test)))
+}
 if (TYPE == "regr") df.test$residual = y_test - yhat_test
 df.test$abs_residual = abs(df.test$residual)
 summary(df.test$residual)
 plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "residual", ylim = ylim1, 
                                                missinfo = misspct, color = hexcol)), 
-          suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "residual", ylim = ylim1)))
+          suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "residual", ylim = ylim1,
+                                               color = color)))
 ggsave(paste0(plotloc,TYPE,"_diagnosis_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), width = 18, height = 12)
 
-# Absolute residuals
+
+
+## Absolute residuals
 summary(df.test$abs_residual)
 plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "abs_residual", ylim = ylim2, 
                                                missinfo = misspct, color = hexcol)), 
-          suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = ylim2)))
+          suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = ylim2,
+                                               color = color)))
 ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
        width = 18, height = 12)
 
@@ -142,7 +143,9 @@ ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plo
 
 
 
-#---- Do some bootstrapped fits ----------------------------------------------------------------------------------
+#---- Check performance on some bootstrapped fits ---------------------------------------------------------------------
+
+## Fit
 n.boot = 5
 l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
   
@@ -153,22 +156,28 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboo
   df.boot = df.train[i.boot,]
   
   # Fit
-  fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.boot[predictors])), df.boot$target,
-              #fit = train(formula, data = df.train[c("target",predictors)],
+  fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.boot[features])), df.boot$target,
+              #fit = train(formula, data = df.train[c("target",features)],
               trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
               method = "xgbTree", 
               tuneGrid = tunepar)
-  yhat = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,predictors])), 
+  yhat = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,features])), 
                  type = type)
   perf = as.numeric(mysummary(data.frame(yhat = yhat, y = df.train$target[i.oob]))[metric])
   return(setNames(list(fit, perf), c(paste0("fit_",i), c(paste0(metric,"_",i)))))
 }
 
-# Is it stable?
-map_dbl(1:n.boot, ~ l.boot[[paste0(metric,"_",.)]]) #on Out-of-bag data
+
+
+## Is it stable?
+
+# Performance on Out-of-bag data
+map_dbl(1:n.boot, ~ l.boot[[paste0(metric,"_",.)]]) 
+
+# Performance on test data
 map_df(1:n.boot, ~ {
   yhat_unscaled = predict(l.boot[[paste0("fit_",.)]], 
-                          xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[predictors])),
+                          xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[features])),
                           type = type)
   yhat = scale_pred(yhat_unscaled, b_sample, b_all)
   data.frame(t(mysummary(data.frame(yhat = yhat, y = df.test$target)))) 
@@ -177,25 +186,26 @@ map_df(1:n.boot, ~ {
 
 
 
-#--- Top variable importance model fit -------------------------------------------------------------------
+#--- Most important variables (importance > 10) model fit -------------------------------------------------------------------
 
 # Variable importance (on train data!)
-df.varimp_train = get_varimp_by_permutation(df.train, fit, vars = predictors, metric = metric)
-predictors_top = df.varimp_train %>% filter(importance > 10) %>% .$variable
-formula_top = as.formula(paste("target", "~", paste(predictors_top, collapse = " + ")))
-formula_top_rightside = as.formula(paste("~", paste(predictors_top, collapse = " + ")))
+df.varimp_train = get_varimp_by_permutation(df.train, fit, dmatrix = TRUE,
+                                            b_sample = b_sample, b_all = b_all, vars = features, metric = metric)
+features_top = df.varimp_train %>% filter(importance > 10) %>% .$variable
+formula_top = as.formula(paste("target", "~", paste(features_top, collapse = " + ")))
+formula_top_rightside = as.formula(paste("~", paste(features_top, collapse = " + ")))
 
 # Fit again -> possibly tune nrounds again
-fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[predictors_top])), df.train$target,
+fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[features_top])), df.train$target,
                 trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
                 method = "xgbTree", 
                 tuneGrid = tunepar)
 
 # Plot performance
-tmp_unscaled = predict(fit_top, xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[predictors_top])),
+yhat_top_unscaled = predict(fit_top, xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[features_top])),
                        type = type)
-tmp = scale_pred(tmp_unscaled, b_sample, b_all)
-plots = get_plot_performance(yhat = tmp, y = df.test$target, reduce_factor = NULL)
+yhat_top = scale_pred(yhat_top_unscaled, b_sample, b_all)
+plots = get_plot_performance(yhat = yhat_top, y = df.test$target, reduce_factor = NULL)
 plots[1]
 
 
@@ -215,7 +225,8 @@ plot(varImp(fit))
 #--- Variable Importance by permuation argument -------------------------------------------------------------------
 
 ## Importance for "total" fit (on test data!)
-df.varimp = get_varimp_by_permutation(df.test, fit, vars = predictors, metric = metric)
+df.varimp = get_varimp_by_permutation(df.test, fit, dmatrix = TRUE,
+                                      b_sample = b_sample, b_all = b_all, vars = features, metric = metric)
 
 # Visual check how many variables needed 
 ggplot(df.varimp) + 
@@ -237,7 +248,9 @@ for (i in 1:n.boot) {
   df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
   #df.test_boot = df.test
   df.varimp_boot %<>% 
-    bind_rows(get_varimp_by_permutation(df.test_boot, l.boot[[paste0("fit_",i)]], predictors, metric = metric) %>% 
+    bind_rows(get_varimp_by_permutation(df.test_boot, l.boot[[paste0("fit_",i)]], dmatrix = TRUE,
+                                        b_sample = b_sample, b_all = b_all,
+                                        feature_names = features, metric = metric) %>% 
                 mutate(run = i))
 }
 
@@ -248,7 +261,7 @@ ggsave(paste0(plotloc,TYPE,"_variable_importance.pdf"), marrangeGrob(plots, ncol
 
 
 
-#--- Compare variable importance for train and test -------------------------------------------------------------------
+#--- Compare variable importance for train and test (hints to variables prone to overfitting) -------------------------
 
 df.tmp = df.varimp[c("variable","importance")] %>% rename("train" = "importance") %>% 
   left_join(df.varimp_train[c("variable","importance")] %>% rename("test" = "importance"), by = "variable") %>% 
@@ -256,7 +269,7 @@ df.tmp = df.varimp[c("variable","importance")] %>% rename("train" = "importance"
   filter(variable %in% topn_vars)
   
 ggplot(df.tmp, aes(variable, importance)) +
-  geom_bar(aes(fill = type), position = "dodge", stat="identity") +
+  geom_bar(aes(fill = type), position = "dodge", stat = "identity") +
   #scale_x_discrete(limits = rev(df.varimp$variable)) +
   scale_fill_discrete(limits = c("train","test")) +
   coord_flip()
@@ -270,12 +283,14 @@ ggplot(df.tmp, aes(variable, importance)) +
 if (type %in% c("class","regr")) {
   
   ## Partial depdendance for "total" fit 
+  # Get "x-axis" points
   levs = map(df.test[nomi], ~ levels(.))
   quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
   df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
   
   # Visual check whether all fits 
-  plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, ref = mean(df.train$target))
+  plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3) 
+                              #ref = mean(df.train$target_num))
   ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
          w = 18, h = 12)
   
@@ -325,7 +340,7 @@ if (TYPE %in% c("class","regr")) {
   i.bottom = order(yhat_explain)[1:20]
   i.random = sample(1:length(yhat_explain), 20)
   i.explain = sample(unique(c(i.top, i.bottom, i.random)))
-  df.test_explain = df.test[i.explain, c("id", predictors)]
+  df.test_explain = df.test[i.explain, c("id", features)]
   
   # Get explanations
   df.explanations = get_explanations(type = TYPE)
