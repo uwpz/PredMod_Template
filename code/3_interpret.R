@@ -19,10 +19,12 @@ source("./code/0_init.R")
 # Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob")
 color = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol)
-ylim1 = switch(TYPE, "class" = c(-1,1), "regr"  = NULL, "multiclass" = c(-1,1))
+ylim1 = switch(TYPE, "class" = c(-1,1), "regr"  = c(-5e4,5e4), "multiclass" = c(-1,1))
 ylim2 = switch(TYPE, "class" = c(0,1), "regr"  = NULL, "multiclass" = c(0,1))
-ylim3 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.2,0.7))
+ylim3 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.1,0.4))
+topn = switch(TYPE, "class" = 10, "regr" = 20, "multiclass" = 20)
 #target_name = switch(TYPE, "class" = "target", "regr"  = "target", "multiclass" = "target_onelev")
+b_all = b_sample = NULL
 
 plotloc = paste0(plotloc,TYPE,"/")
 
@@ -36,10 +38,16 @@ registerDoParallel(cl)
 
 
 ## Tuning parameter to use
-tunepar = expand.grid(nrounds = 100, max_depth = 6, 
-                      eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
-                      min_child_weight = 5, subsample = 0.7)
-
+if (TYPE == "class") {
+  tunepar = expand.grid(nrounds = 1000, max_depth = 6, 
+                        eta = 0.01, gamma = 0, colsample_bytree = 0.5, 
+                        min_child_weight = 2, subsample = 0.5)
+}
+if (TYPE %in% c("regr","multiclass")) {
+  tunepar = expand.grid(nrounds = 500, max_depth = 3, 
+                        eta = 0.03, gamma = 0, colsample_bytree = 0.7, 
+                        min_child_weight = 5, subsample = 0.7)
+}
 
 
 
@@ -117,7 +125,7 @@ if (TYPE == "multiclass") {
   k = 2
   df.test$residual = ifelse(y_test == levels(y_test)[k], 1, 0) - yhat_test[,k]
   # Alternative: dynamic refernce member per obs, i.e. the true label
-  #df.test$residual = 1 - rowSums(yhat_test * model.matrix(~ -1 + y_test, data.frame(y_test)))
+  df.test$residual = 1 - rowSums(yhat_test * model.matrix(~ -1 + y_test, data.frame(y_test)))
 }
 if (TYPE == "regr") df.test$residual = y_test - yhat_test
 df.test$abs_residual = abs(df.test$residual)
@@ -162,7 +170,7 @@ l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboo
               method = "xgbTree", 
               tuneGrid = tunepar)
   yhat = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[i.oob,features])), 
-                 type = type)
+                 type = type) #do NOT rescale on OOB data
   perf = as.numeric(mysummary(data.frame(yhat = yhat, y = df.train$target[i.oob]))[metric])
   return(setNames(list(fit, perf), c(paste0("fit_",i), c(paste0(metric,"_",i)))))
 }
@@ -205,7 +213,7 @@ fit_top = train(xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.train[
 yhat_top_unscaled = predict(fit_top, xgb.DMatrix(sparse.model.matrix(formula_top_rightside, df.test[features_top])),
                        type = type)
 yhat_top = scale_pred(yhat_top_unscaled, b_sample, b_all)
-plots = get_plot_performance(yhat = yhat_top, y = df.test$target, reduce_factor = NULL)
+plots = get_plot_performance(yhat = yhat_top, y = df.test$target, reduce_factor = NULL, colors = color)
 plots[1]
 
 
@@ -232,7 +240,7 @@ df.varimp = get_varimp_by_permutation(df.test, fit, dmatrix = TRUE,
 ggplot(df.varimp) + 
   geom_bar(aes(x = reorder(variable, importance), y = importance), stat = "identity") +
   coord_flip() 
-topn = 10
+topn = topn
 topn_vars = df.varimp[1:topn, "variable"]
 
 # Add other information (e.g. special coloring): color variable is needed -> fill with "dummy" if it should be ommited
@@ -240,7 +248,7 @@ df.varimp %<>% mutate(color = cut(importance, c(-1,10,50,101), labels = c("low",
 
 
 
-## Importance for bootstrapped models (and bootstrapped data)
+## Importance for bootstrapped models (and bootstrapped data): ONLY for topn_vars
 # Get boostrap values
 df.varimp_boot = c()
 for (i in 1:n.boot) {
@@ -250,7 +258,7 @@ for (i in 1:n.boot) {
   df.varimp_boot %<>% 
     bind_rows(get_varimp_by_permutation(df.test_boot, l.boot[[paste0("fit_",i)]], dmatrix = TRUE,
                                         b_sample = b_sample, b_all = b_all,
-                                        feature_names = features, metric = metric) %>% 
+                                        feature_names = topn_vars, metric = metric) %>% 
                 mutate(run = i))
 }
 
@@ -280,23 +288,24 @@ ggplot(df.tmp, aes(variable, importance)) +
 #|||| Partial Dependance ||||----
 #######################################################################################################################-
 
-if (type %in% c("class","regr")) {
+if (TYPE %in% c("class","regr")) {
   
   ## Partial depdendance for "total" fit 
   # Get "x-axis" points
   levs = map(df.test[nomi], ~ levels(.))
   quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
-  df.partialdep = get_partialdep(df.test, fit, vars = topn_vars, levs = levs, quantiles = quantiles)
+  df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
+                                 vars = topn_vars, levs = levs, quantiles = quantiles)
   
   # Visual check whether all fits 
-  plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3) 
-                              #ref = mean(df.train$target_num))
+  plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color,
+                              ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
   ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
          w = 18, h = 12)
   
   
   
-  ## Partial Dependance for bootstrapped models (and bootstrapped data) 
+  ## Partial dependance for bootstrapped models (and bootstrapped data) 
   # Get boostrap values
   df.partialdep_boot = c()
   for (i in 1:n.boot) {
@@ -304,18 +313,16 @@ if (type %in% c("class","regr")) {
     df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
     #df.test_boot = df.test
     df.partialdep_boot %<>% 
-      bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], 
+      bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], b_sample = b_sample, b_all = b_all,
                                vars = topn_vars, levs = levs, quantiles = quantiles) %>% 
                   mutate(run = i))
   }
   
-  # Rescale
-  #df.partialdep_boot$yhat = prob_samp2full(df.partialdep_boot$yhat, b_sample, b_all)
-  
   
   
   ## Plot
-  plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = c(0.2,0.5))
+  plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = ylim3,
+                              ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
   ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
          w = 18, h = 12)
 
@@ -344,8 +351,6 @@ if (TYPE %in% c("class","regr")) {
   
   # Get explanations
   df.explanations = get_explanations(type = TYPE)
-  
-  
   
   
   ## Plot

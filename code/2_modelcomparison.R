@@ -50,7 +50,7 @@ if (TYPE %in% c("class","multiclass")) {
 }
 if (TYPE == "regr") {
   # Just take data from train fold
-  df.train = df %>% filter(fold == "train") %>% sample_n(1000)
+  df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
 }
 
 
@@ -116,9 +116,9 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features
 #fit = train(formula, data = df.train[c("target",features)],
             trControl = ctrl_idx_nopar_fff, metric = metric, #no parallel for DMatrix
             method = "xgbTree", 
-            tuneGrid = expand.grid(nrounds = seq(100,2100,200), max_depth = c(3,6), 
-                                   eta = c(0.1,0.01), gamma = 0, colsample_bytree = c(0.7), 
-                                   min_child_weight = c(10), subsample = c(0.7)))
+            tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = c(3,6), 
+                                   eta = c(0.01,0.1), gamma = 0, colsample_bytree = c(0.7), 
+                                   min_child_weight = c(5,10), subsample = c(0.7)))
 plot(fit)
 
 if (TYPE != "multiclass") {
@@ -307,6 +307,19 @@ ggsave(paste0(plotloc,TYPE,"_model_comparison.pdf"), p, width = 12, height = 8)
 # Basic data sampling
 df.lc = df #%>% sample_n(1000)
 
+# Tuning parameter to use
+if (TYPE == "CLASS") {
+  tunepar = expand.grid(nrounds = seq(100,2100,200), max_depth = 6, 
+                        eta = 0.01, gamma = 0, colsample_bytree = 0.5, 
+                        min_child_weight = 2, subsample = 0.5)
+}
+if (TYPE == "regr") {
+  tunepar = expand.grid(nrounds = 100, max_depth = 3, 
+                        eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
+                        min_child_weight = 20, subsample = 0.7)
+}
+
+
 
 
 #---- Loop over training chunks --------------------------------------------------------------------------------------
@@ -314,7 +327,7 @@ df.lc = df #%>% sample_n(1000)
 chunks_pct = c(seq(10,10,1), seq(20,100,10))
 to = length(chunks_pct)
 
-df.lc_Result = foreach(i = 1:to, .combine = bind_rows, 
+df.lc_result = foreach(i = 1:to, .combine = bind_rows, 
                        .packages = c("zeallot","dplyr","caret","Matrix","xgboost")) %do%  #NO dopar for xgboost!
 { 
   #i = 1
@@ -347,9 +360,7 @@ df.lc_Result = foreach(i = 1:to, .combine = bind_rows,
               trControl = ctrl_idx_nopar, 
               metric = metric, #no parallel for DMatrix
               method = "xgbTree", 
-              tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = 6, 
-                                     eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
-                                     min_child_weight = 5, subsample = 0.7))
+              tuneGrid = tunepar)
   print(Sys.time() - tmp)
   
   
