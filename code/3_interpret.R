@@ -154,7 +154,7 @@ ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plo
 #---- Check performance on some bootstrapped fits ---------------------------------------------------------------------
 
 ## Fit
-n.boot = 20
+n.boot = 5
 l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
   
   # Bootstrap
@@ -233,7 +233,7 @@ plot(varImp(fit))
 #--- Variable Importance by permuation argument -------------------------------------------------------------------
 
 ## Importance for "total" fit (on test data!)
-df.varimp = get_varimp_by_permutation(df.test, fit, dmatrix = TRUE,
+df.varimp = get_varimp_by_permutation(df.test, fit, dmatrix = TRUE, feature_names = features,
                                       b_sample = b_sample, b_all = b_all, vars = features, metric = metric)
 
 # Visual check how many variables needed 
@@ -256,9 +256,10 @@ for (i in 1:n.boot) {
   df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
   #df.test_boot = df.test
   df.varimp_boot %<>% 
-    bind_rows(get_varimp_by_permutation(df.test_boot, l.boot[[paste0("fit_",i)]], dmatrix = TRUE,
+    bind_rows(get_varimp_by_permutation(df.test_boot, l.boot[[paste0("fit_",i)]], dmatrix = TRUE, 
+                                        feature_names = features,
                                         b_sample = b_sample, b_all = b_all,
-                                        feature_names = topn_vars, metric = metric) %>% 
+                                        vars = topn_vars, metric = metric) %>% 
                 mutate(run = i))
 }
 
@@ -297,8 +298,7 @@ df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
                                vars = topn_vars, levs = levs, quantiles = quantiles)
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color,
-                            ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color)
 ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
