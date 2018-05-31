@@ -1074,7 +1074,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
 ## Get plot list for partial dependance
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
-                               ylim = NULL, ref = 0, colors = twocol, min_width = 0.2,
+                               ylim = NULL, colors = twocol, min_width = 0.2,
                                legend_only_in_1stplot = TRUE,
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   
@@ -1121,7 +1121,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
     
     # Just take "Y"-class in non-multiclass case
     if (type == "class") {
-      df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levs_target[2],"'")) 
+      df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levs_target[2],"'"))
       if (!is.null(df.plot_boot)) df.ggplot_boot = df.ggplot_boot %>% 
                                       filter_(paste0(target_name," == '",levs_target[2],"'")) 
     }
@@ -1149,6 +1149,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         df.ggplot[[target_name]] = factor(as.character(df.ggplot[[target_name]]), levels = rev(levs_target))
       } else {
         df.ggplot[[target_name]] = "target"
+        if (!is.null(df.plot_boot)) df.ggplot_boot[[target_name]] = "target"
       }
     
       # Plot 
@@ -1169,7 +1170,10 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       df.ggplot[[.x]] = as.numeric(df.ggplot$value)
       if (!is.null(df.plot_boot)) df.ggplot_boot[[.x]] = as.numeric(df.ggplot_boot$value)
       
-      if (type == "regr") df.ggplot[[target_name]] = "target"
+      if (type == "regr") {
+        df.ggplot[[target_name]] = "target"
+        if (!is.null(df.plot_boot)) df.ggplot_boot[[target_name]] = "target"
+      }
 
       # For retrieving max y-axis value for rescaling density plot
       tmp = ggplot_build(ggplot(df.ggplot, aes_string(.x)) +
@@ -1183,7 +1187,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         geom_line(aes_string(y = "yhat")) +
         geom_point(aes_string(y = "yhat")) +
         geom_rug(aes_string(.x), df.ggplot, sides = "b", col = "darkgrey") +
-        geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
+        geom_hline(yintercept = refs, linetype = 2, color = "darkgrey") +
         labs(title = .x, x = "", y = expression(hat(y))) +
         coord_cartesian(ylim = ylim, expand = FALSE) +
         theme_my
@@ -1232,8 +1236,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
           p = p +
             geom_errorbar(aes_string(x = .x, ymin = "lci", ymax = "rci"), data = df.help, size = 0.5, width = 0.05,
                           show.legend = FALSE)
-        }
-        else {
+        } else {
           p = p +
             geom_ribbon(aes_string(x = .x, ymin = "lci", ymax = "rci", fill = target_name, color = target_name), 
                         data = df.help, alpha = 0.1, show.legend = FALSE)
