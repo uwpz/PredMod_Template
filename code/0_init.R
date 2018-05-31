@@ -393,28 +393,25 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
           group_by_(.x) %>% 
           mutate(y = y/sum(y)) %>% 
           left_join(df.hlp) %>% 
-          mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
-                                   target_name)) %>%  
+          mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levs_target),)"), 
+                                   target_name)) %>%  #reverse levels for multiclass
           mutate(width = ifelse(width < min_width, min_width, width))
       )
       
+      # Adpat color (as levels are reversed)
+      color = rev(color)
+      
       # Just take "Y"-class in non-multiclass case
       if (!multiclass) {
-        df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levels(df.ggplot[[target_name]])[2],"'")) 
-        #df.hlp = df.ggplot
+        df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levels(df.ggplot[[target_name]])[1],"'")) 
+        df.hlp = df.ggplot #fix problem with missing combinations
       }
       
-      # Adpat color
-      if (multiclass) color = rev(color) else color = color[2]
-      
       # Plot
-      p = ggplot(df.ggplot, aes_string(x = .x, y = "y", fill = target_name))
-      if (multiclass) {
-        p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
-      } else{
-        p = p +geom_bar(stat = "identity", width = df.ggplot$width, color = "black") 
-      } 
-      p = p +
+
+      p = ggplot(df.ggplot, aes_string(x = .x, y = "y", fill = target_name)) + 
+        geom_bar(stat = "identity", position = ifelse(multiclass == TRUE, "fill", "stack"), 
+                 width = df.ggplot$width, color = "black") +
         scale_fill_manual(values = alpha(color, 0.2)) +
         scale_x_discrete(labels = paste0(df.hlp[[.x]], " (", round(100 * df.hlp[["prop"]], decimals), "%)")) + 
         geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +

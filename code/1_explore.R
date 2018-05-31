@@ -17,7 +17,7 @@ skip = function() {
 source("./code/0_init.R")
 
 # Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-color = switch(TYPE, "class" = rev(twocol), "regr" = hexcol, "multiclass" = fourcol)
+color = switch(TYPE, "class" = twocol, "regr" = hexcol, "multiclass" = fourcol)
 cutoff = switch(TYPE, "class" = 0.1, "regr"  = 0.9, "multiclass" = 0.9)
 ylim = switch(TYPE, "class" = NULL, "regr"  = c(0,2.5e5), "multiclass" = c(0,2.5e5))
 plotloc = paste0(plotloc,TYPE,"/")
