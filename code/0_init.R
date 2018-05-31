@@ -360,9 +360,18 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
   #browser()
   ## Classification
   if (is.factor(df.plot[[target_name]])) {
+  
     # Get levels of target
     levs_target = levels(df.plot[[target_name]])
-    
+          
+    # Proportion target (for reference lines)
+    refs = df.plot %>% 
+      group_by_(target_name) %>% 
+      summarise(ref = n()) %>% 
+      mutate(ref = cumsum(ref)/sum(ref)) %>% 
+      .$ref
+    if (length(levs_target) > 2) refs = refs[-length(refs)] else refs = refs[2] - refs[1]
+	
     # Loop over vars
     plots = map(vars, ~ {
       #.x = vars[1]
@@ -373,42 +382,33 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       
       # Proportion nominal variable
       df.hlp = df.plot %>% 
-        group_by_(.x) %>% 
-        summarise(perc = n()/nrow(df.plot))
-      
-      # Proportion target (for reference lines)
-      refs = df.plot %>% 
-        group_by_(target_name) %>% 
-        summarise(ref = n()) %>% 
-        mutate(ref = cumsum(ref)/sum(ref)) %>% 
-        .$ref
-      if (multiclass) refs = refs[-length(refs)] else refs = refs[2] - refs[1]
-      
+        group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% 
+        mutate(prop = n/sum(n), width = n/max(n))
+
       # Prepare data for plotting
       df.ggplot = suppressMessages(
         df.plot %>% 
           group_by_(.x, target_name) %>% 
-          summarise(prop = n()) %>% 
+          summarise(y = n()) %>% 
           group_by_(.x) %>% 
-          mutate(prop = prop/sum(prop)) %>% 
+          mutate(y = y/sum(y)) %>% 
           left_join(df.hlp) %>% 
           mutate_(.dots = setNames(paste0("factor(as.character(",target_name,"), levels = rev(levels(",target_name,")))"), 
                                    target_name)) %>%  
-          mutate(width = perc/max(.$perc)) %>%  
           mutate(width = ifelse(width < min_width, min_width, width))
       )
       
       # Just take "Y"-class in non-multiclass case
       if (!multiclass) {
         df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levels(df.ggplot[[target_name]])[2],"'")) 
-        df.hlp = df.ggplot
+        #df.hlp = df.ggplot
       }
       
       # Adpat color
       if (multiclass) color = rev(color) else color = color[2]
       
       # Plot
-      p = ggplot(df.ggplot, aes_string(x = .x, y = "prop", fill = target_name))
+      p = ggplot(df.ggplot, aes_string(x = .x, y = "y", fill = target_name))
       if (multiclass) {
         p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
       } else{
@@ -416,7 +416,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       } 
       p = p +
         scale_fill_manual(values = alpha(color, 0.2)) +
-        scale_x_discrete(labels = paste0(df.hlp[[.x]], " (", round(100 * df.hlp[["perc"]], decimals), "%)")) + 
+        scale_x_discrete(labels = paste0(df.hlp[[.x]], " (", round(100 * df.hlp[["prop"]], decimals), "%)")) + 
         geom_hline(yintercept = refs, size = 0.5, colour = "black", linetype = 3) +
         labs(title = paste0(.x, if (!is.null(varimpinfo)) paste0(" (VI:", round(varimpinfo[.x], 2), ")")), 
              x = "", 
@@ -426,7 +426,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       
       if (inner_barplot) {   
         # Inner Barplot
-        p.inner = ggplot(data = df.hlp, aes_string(x = .x, y = "perc")) +
+        p.inner = ggplot(data = df.hlp, aes_string(x = .x, y = "prop")) +
           geom_bar(stat= "identity", fill = "grey", colour = "black", width = 0.9) +
           coord_flip() +
           #scale_x_discrete(limits = rev(df.tmp2[[.]]), labels = rev(df.tmp2$label)) +
@@ -1026,7 +1026,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
                           vars = topn_vars, levs, quantiles) {
   #browser()
   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"),
-                          .export = c("scale_pred")) %do% 
+                          .export = c("scale_pred")) %dopar% 
   {
     print(vars[i])
     
@@ -1075,25 +1075,43 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
 get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
                                ylim = NULL, ref = 0, colors = twocol, min_width = 0.2,
+                               legend_only_in_1stplot = TRUE,
                                df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
   
   #browser()
   
-  # Adapt ylim if not set
-  if (is.null(ylim)) ylim = range(as.numeric(df.for_partialdep[[target_name]]))
-  
-  # Target type?
-  type = "regr"
+  # Determine target type
   if (is.factor(df.for_partialdep[[target_name]])) type = "class" else type = "regr" 
   if (type == "class" & length(levels(df.for_partialdep[[target_name]])) > 2) type = "multiclass"
   
-  # Adapt color
-  if (type == "multiclass") colors = rev(color) else colors = colors[2]
+  # Get levels and distribution (for refernce linses) of target
+  if (type != "regr") {
+    levs_target = levels(df.for_partialdep[[target_name]])
+    
+    # Proportion target (for reference lines)
+    refs = df.for_partialdep %>% 
+      group_by_(target_name) %>% 
+      summarise(ref = n()) %>% 
+      mutate(ref = cumsum(ref)/sum(ref)) %>% 
+      .$ref
+    if (type == "multiclass") refs = refs[-length(refs)] else refs = refs[2] - refs[1]
+  } else {
+    refs = mean(df.for_partialdep[[target_name]])
+  }
   
+  # Adapt ylim if not set
+  if (is.null(ylim)) {
+    ylim = c(0,1)
+    if (type == "regr") ylim = range(df.for_partialdep[[target_name]])
+  }
+  
+  # Adapt color
+  #if (type != "regr") colors = rev(colors) else colors = colors[length(colors)]
+  colors = rev(colors)
   
   # Plot
   plots = map(vars, ~ {
-    #.x = vars[2]
+    #.x = vars[3]
 
     print(.x)
     
@@ -1103,95 +1121,122 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
     
     # Just take "Y"-class in non-multiclass case
     if (type == "class") {
-      df.ggplot = df.ggplot %>% filter_(paste0("target"," == '",levels(df.for_partialdep[[target_name]])[2],"'")) 
+      df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levs_target[2],"'")) 
       if (!is.null(df.plot_boot)) df.ggplot_boot = df.ggplot_boot %>% 
-                                      filter_(paste0("target"," == '",levels(df.for_partialdep[[target_name]])[2],"'")) 
+                                      filter_(paste0(target_name," == '",levs_target[2],"'")) 
     }
 
-    # Plot
+    # Distinguish nominal from metric feature
     if (is.factor(df.for_partialdep[[.x]])) {
-      # Adapt .x
-      df.ggplot[.x] = factor(df.ggplot$value, levels = levels(df.for_partialdep[[.x]])) 
-      if (!is.null(df.plot_boot)) df.ggplot_boot[.x] = factor(df.ggplot_boot$value, 
-                                                              levels = levels(df.for_partialdep[[.x]])) 
+      
+      ## Plot for nominal feature
+      
+      # Proportion nominal variable
+      df.hlp = df.for_partialdep %>% 
+        group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% 
+        mutate(prop = n/sum(n), width = n/max(n))
+      
+      # Adapt value to .x
+      df.ggplot[[.x]] = factor(as.character(df.ggplot$value), levels = levels(df.for_partialdep[[.x]])) 
+      if (!is.null(df.plot_boot)) df.ggplot_boot[[.x]] = 
+                      factor(as.character(df.ggplot_boot$value), levels = levels(df.for_partialdep[[.x]])) 
+      
+      # Prepare data for plotting
       df.ggplot = df.ggplot %>% 
-        left_join(df.for_partialdep %>% group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% 
-                    mutate(prop = n/sum(n), width = n/max(n))) %>% 
-        mutate(width = ifelse(width < min_width, min_width, width))
-      df.hlp = df.ggplot %>% select_(.x, "prop", "width") %>% distinct()
-      
-      
-      # Plot for a nominal variable
-      p = ggplot(df.ggplot, aes_string(x = .x, y = "yhat", fill = "target"))
-
-      if (type == "multiclass") {
-        p = p + geom_bar(stat = "identity", position = "fill", width = df.ggplot$width, color = "black") 
-        ylim = c(0,1)
+        left_join(df.hlp) %>% 
+        mutate(width = ifelse(width < min_width, min_width, width)) 
+      if (type != "regr") {
+        df.ggplot[[target_name]] = factor(as.character(df.ggplot[[target_name]]), levels = rev(levs_target))
       } else {
-        p = p + geom_bar(stat = "identity", width = df.ggplot$width, color = "black") 
-      } 
-      p = p +
-        #scale_fill_manual(values = alpha(color, 0.2)) +
-        labs(title = .x, x = "", y = expression(hat(y))) +
-        geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
+        df.ggplot[[target_name]] = "target"
+      }
+    
+      # Plot 
+      p = ggplot(df.ggplot, aes_string(x = .x, y = "yhat", fill = target_name)) + 
+        geom_bar(stat = "identity", position = ifelse(type == "multiclass", "fill", "stack"), 
+                 width = df.ggplot$width, color = "black") +
+        scale_fill_manual(values = alpha(colors, 0.2)) +
         scale_x_discrete(labels = paste0(as.character(df.hlp[[.x]]), " (", round(100 * df.hlp[["prop"]],1), "%)")) +
-        #scale_y_continuous(limits = ylim) +
-        coord_flip(ylim = ylim) +
-        theme_my  
+        geom_hline(yintercept = refs, linetype = 2, color = "darkgrey") +
+        labs(title = .x, x = "", y = expression(hat(y))) +
+        coord_flip() +
+        theme_my
 
     } else {
+      ## Plot for metric feature
+      
       # Adapt x
       df.ggplot[[.x]] = as.numeric(df.ggplot$value)
       if (!is.null(df.plot_boot)) df.ggplot_boot[[.x]] = as.numeric(df.ggplot_boot$value)
       
+      if (type == "regr") df.ggplot[[target_name]] = "target"
+
       # For retrieving max y-axis value for rescaling density plot
       tmp = ggplot_build(ggplot(df.ggplot, aes_string(.x)) +
                            geom_density(aes_string(y = paste0("..density..")), data = df.for_partialdep))
       
-      # Plot for a metric variable
-      p = ggplot(df.ggplot, aes_string(x = .x, color = "target")) +
+      # Plot 
+      p = ggplot(df.ggplot, aes_string(x = .x, color = target_name)) +
         geom_density(aes_string(y = paste0(ylim[1]," + ","..density.. * ", 
                                            (ylim[2] - ylim[1]) / tmp$layout$panel_ranges[[1]]$y.range[2])), 
-                     data = df.for_partialdep, fill = alpha("grey", 0.2), color = alpha("grey", 0.2)) +
+                     data = df.for_partialdep, fill = alpha("grey", 0.3), color = alpha("grey", 0.3)) +
         geom_line(aes_string(y = "yhat")) +
         geom_point(aes_string(y = "yhat")) +
         geom_rug(aes_string(.x), df.ggplot, sides = "b", col = "darkgrey") +
         geom_hline(yintercept = ref, linetype = 2, color = "darkgrey") +
         labs(title = .x, x = "", y = expression(hat(y))) +
-        #scale_y_continuous(limits = ylim) +
         coord_cartesian(ylim = ylim, expand = FALSE) +
-        theme_my 
+        theme_my
+    }
+    
+    if (legend_only_in_1stplot == TRUE) {
+      if (.x != vars[1]) p = p + theme(legend.position = "none") #legend only for first plot
     }
     
     # Add boostrap information
     if (!is.null(df.plot_boot)) {
+      
+      if (type != "regr") df.ggplot_boot[[target_name]] = factor(as.character(df.ggplot_boot[[target_name]]), 
+                                                                 levels = levs_target)
+      # Needed to group lines
+      df.ggplot_boot$group = interaction(df.ggplot_boot[[run_name]], df.ggplot_boot[[target_name]] )
+      
+      if (type == "multiclass" & is.factor(df.for_partialdep[[.x]])) {
+        df.ggplot_boot = df.ggplot_boot %>% group_by_(.x, "run") %>% mutate(yhat = cumsum(yhat))
+      }
+      
       # Add bootstrap lines
       if (bootstrap_lines == TRUE) {
         p = p +
-          geom_line(aes_string(x = .x, y = "yhat", group = run_name), data = df.ggplot_boot, 
-                   size = 0.1, alpha = 0.5) +
-          geom_line(aes_string(y = "yhat")) + #plot red lines again
-          geom_point(aes_string(y = "yhat")) #plot red lines again
-          # geom_point(aes_string(x = .x, y = "yhat", group = run_name), data = df.ggplot_boot, 
-          #            color = "black", size = 0.3) 
+          geom_line(aes_string(x = .x, y = "yhat", color = target_name, group = "group"), data = df.ggplot_boot, 
+                   size = 0.1, alpha = 0.2, show.legend = FALSE) #+
+          #geom_line(aes_string(y = "yhat", group = run_name)) + #plot red lines again
+          #geom_point(aes_string(y = "yhat", group = run_name)) #plot red dots again
       }
       
       # Add bootstrap Confidence Intervals
       if (bootstrap_CI == TRUE) {
+        
         # Calculate confidence intervals
         df.help = df.ggplot_boot %>% 
-          group_by_(.x, "target") %>% 
+          group_by_(.x, target_name) %>% 
           summarise(sd = sd(yhat)) %>% 
-          left_join(select_(df.ggplot, .x, "yhat")) %>% 
-          mutate(lci = yhat - 1.96*sd, rci = yhat + 1.96*sd)
+          left_join(select_(df.ggplot, .x, "yhat", target_name)) 
+        if (type == "multiclass" & is.factor(df.for_partialdep[[.x]])) {
+          df.help = df.help %>% group_by_(.x) %>% mutate(yhat = cumsum(yhat))
+        }
+        df.help = df.help %>% mutate(lci = yhat - 1.96*sd, rci = yhat + 1.96*sd)
+        
+        # Add errorbar or ribbon
         if (is.factor(df.for_partialdep[[.x]])) {
           p = p +
-            geom_errorbar(aes_string(x = .x, ymin = "lci", ymax = "rci"), data = df.help, size = 0.5, width = 0.05)
+            geom_errorbar(aes_string(x = .x, ymin = "lci", ymax = "rci"), data = df.help, size = 0.5, width = 0.05,
+                          show.legend = FALSE)
         }
         else {
           p = p +
-            geom_ribbon(aes_string(x = .x, ymin = "lci", ymax = "rci", color = "target", fill = "target"), 
-                        data = df.help, alpha = 0.1)
+            geom_ribbon(aes_string(x = .x, ymin = "lci", ymax = "rci", fill = target_name, color = target_name), 
+                        data = df.help, alpha = 0.1, show.legend = FALSE)
         }
       }
     }

@@ -58,7 +58,7 @@ if (TYPE == "regr") {
 
 # Define some controls --------------------------------------------------------------------------------------------
 
-set.seed(999)
+set.seed(998)
 l.index = list(i = sample(1:nrow(df.train), floor(0.8*nrow(df.train))))
 ctrl_idx_fff = trainControl(method = "cv", number = 1, index = l.index, 
                             returnResamp = "final", returnData = FALSE,
@@ -69,8 +69,11 @@ ctrl_idx_nopar_fff = trainControl(method = "cv", number = 1, index = l.index,
                                   allowParallel = FALSE, #no parallel e.g. for xgboost on big data or with DMatrix
                                   summaryFunction = mysummary, classProbs = TRUE, 
                                   indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
-
-
+ctrl_cv_nopar_fff = trainControl(method = "cv", number = 5, 
+                                 returnResamp = "final", returnData = FALSE,
+                                 allowParallel = FALSE, #no parallel e.g. for xgboost on big data or with DMatrix
+                                 summaryFunction = mysummary, classProbs = TRUE,
+                                 indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
 
 
 # Fits --------------------------------------------------------------------------------------------
@@ -117,8 +120,8 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features
             trControl = ctrl_idx_nopar_fff, metric = metric, #no parallel for DMatrix
             method = "xgbTree", 
             tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = c(3,6), 
-                                   eta = c(0.01,0.1), gamma = 0, colsample_bytree = c(0.7), 
-                                   min_child_weight = c(5,10), subsample = c(0.7)))
+                                   eta = c(0.01,0.05), gamma = 0, colsample_bytree = c(0.3,0.7), 
+                                   min_child_weight = c(2,5,10), subsample = c(0.3,0.7)))
 plot(fit)
 
 if (TYPE != "multiclass") {
@@ -190,6 +193,19 @@ skip = function() {
 # Basic data sampling
 df.sim = df #%>% sample_n(1000)
 
+# Tunegrid
+if (TYPE == "class") {
+  tunepar = expand.grid(nrounds = seq(100,500,200), max_depth = 3, 
+                        eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
+                        min_child_weight = 2, subsample = 0.7)
+}
+if (TYPE %in% c("regr","multiclass")) {
+  tunepar = expand.grid(nrounds = seq(100,500,200), max_depth = 6, 
+                        eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
+                        min_child_weight = 5, subsample = 0.7)
+}
+
+
 
 
 #---- Simulation function ---------------------------------------------------------------------------------------
@@ -199,7 +215,8 @@ perfcomp = function(method, nsim = 5) {
   result = foreach(sim = 1:nsim, .combine = bind_rows, .packages = c("caret","Matrix","xgboost"), 
                    .export = c("df.sim","mysummary","metric","type",
                                "features_binned","features",
-                               "formula","formula_binned","formula_rightside","formula_binned_rightside")) %dopar% 
+                               "formula","formula_binned","formula_rightside","formula_binned_rightside",
+                               "tunepar")) %dopar% 
   {
     
     # Hold out a k*100% set
@@ -240,9 +257,7 @@ perfcomp = function(method, nsim = 5) {
                   trControl = ctrl_idx_nopar, 
                   metric = metric, 
                   method = "xgbTree", 
-                  tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = 6, 
-                                         eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
-                                         min_child_weight = 5, subsample = 0.7))
+                  tuneGrid = tunepar)
     }
 
     
@@ -274,7 +289,7 @@ perfcomp = function(method, nsim = 5) {
 #---- Simulate --------------------------------------------------------------------------------------------
 
 df.sim_result = as.data.frame(c())
-nsim = 2
+nsim = 5
 df.sim_result = bind_rows(df.sim_result, perfcomp(method = "glmnet", nsim = nsim) )   
 df.sim_result = bind_rows(df.sim_result, perfcomp(method = "xgbTree", nsim = nsim))       
 #df.sim_result = bind_rows(df.sim_result, perfcomp(method = "deepLearning", nsim = nsim))       
@@ -307,16 +322,16 @@ ggsave(paste0(plotloc,TYPE,"_model_comparison.pdf"), p, width = 12, height = 8)
 # Basic data sampling
 df.lc = df #%>% sample_n(1000)
 
-# Tuning parameter to use
-if (TYPE == "CLASS") {
-  tunepar = expand.grid(nrounds = seq(100,2100,200), max_depth = 6, 
-                        eta = 0.01, gamma = 0, colsample_bytree = 0.5, 
-                        min_child_weight = 2, subsample = 0.5)
+# Tunegrid
+if (TYPE == "class") {
+  tunepar = expand.grid(nrounds = seq(100,500,100), max_depth = 3, 
+                        eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
+                        min_child_weight = 2, subsample = 0.7)
 }
-if (TYPE == "regr") {
-  tunepar = expand.grid(nrounds = 100, max_depth = 3, 
-                        eta = 0.1, gamma = 0, colsample_bytree = 0.7, 
-                        min_child_weight = 20, subsample = 0.7)
+if (TYPE %in% c("regr","multiclass")) {
+  tunepar = expand.grid(nrounds = seq(100,500,100), max_depth = 3, #3 or 6
+                        eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
+                        min_child_weight = 5, subsample = 0.7)
 }
 
 
@@ -353,7 +368,7 @@ df.lc_result = foreach(i = 1:to, .combine = bind_rows,
                                 returnResamp = "final", returnData = FALSE,
                                 allowParallel = FALSE,
                                 summaryFunction = mysummary, classProbs = TRUE)
-  #ctrl_none = trainControl(method = "none", returnData = FALSE, classProbs = TRUE)
+  ctrl_none = trainControl(method = "none", returnData = FALSE, classProbs = TRUE)
   tmp = Sys.time()
   fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), 
               df.train$target,

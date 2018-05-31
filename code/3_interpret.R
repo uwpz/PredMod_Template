@@ -39,13 +39,13 @@ registerDoParallel(cl)
 
 ## Tuning parameter to use
 if (TYPE == "class") {
-  tunepar = expand.grid(nrounds = 1000, max_depth = 6, 
-                        eta = 0.01, gamma = 0, colsample_bytree = 0.5, 
-                        min_child_weight = 2, subsample = 0.5)
+  tunepar = expand.grid(nrounds = 500, max_depth = 3, 
+                        eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
+                        min_child_weight = 2, subsample = 0.7)
 }
 if (TYPE %in% c("regr","multiclass")) {
   tunepar = expand.grid(nrounds = 500, max_depth = 3, 
-                        eta = 0.03, gamma = 0, colsample_bytree = 0.7, 
+                        eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
                         min_child_weight = 5, subsample = 0.7)
 }
 
@@ -154,7 +154,7 @@ ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plo
 #---- Check performance on some bootstrapped fits ---------------------------------------------------------------------
 
 ## Fit
-n.boot = 5
+n.boot = 20
 l.boot = foreach(i = 1:n.boot, .combine = c, .packages = c("caret","ROCR","xgboost","Matrix")) %dopar% { 
   
   # Bootstrap
@@ -288,46 +288,43 @@ ggplot(df.tmp, aes(variable, importance)) +
 #|||| Partial Dependance ||||----
 #######################################################################################################################-
 
-if (TYPE %in% c("class","regr")) {
-  
-  ## Partial depdendance for "total" fit 
-  # Get "x-axis" points
-  levs = map(df.test[nomi], ~ levels(.))
-  quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
-  df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
-                                 vars = topn_vars, levs = levs, quantiles = quantiles)
-  
-  # Visual check whether all fits 
-  plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color,
-                              ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
-  ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
-         w = 18, h = 12)
-  
-  
-  
-  ## Partial dependance for bootstrapped models (and bootstrapped data) 
-  # Get boostrap values
-  df.partialdep_boot = c()
-  for (i in 1:n.boot) {
-    set.seed(i*1234)
-    df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
-    #df.test_boot = df.test
-    df.partialdep_boot %<>% 
-      bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], b_sample = b_sample, b_all = b_all,
-                               vars = topn_vars, levs = levs, quantiles = quantiles) %>% 
-                  mutate(run = i))
-  }
-  
-  
-  
-  ## Plot
-  plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = ylim3,
-                              ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
-  ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
-         w = 18, h = 12)
+
+## Partial depdendance for "total" fit 
+# Get "x-axis" points
+levs = map(df.test[nomi], ~ levels(.))
+quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
+df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
+                               vars = topn_vars, levs = levs, quantiles = quantiles)
+
+# Visual check whether all fits 
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color,
+                            ref = mean(as.numeric(df.test$target))) #TODO: adapt ref
+ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+       w = 18, h = 12)
 
 
+
+## Partial dependance for bootstrapped models (and bootstrapped data) 
+# Get boostrap values
+df.partialdep_boot = c()
+for (i in 1:n.boot) {
+  set.seed(i*1234)
+  df.test_boot = df.test[sample(1:nrow(df.test), replace = TRUE),]  
+  #df.test_boot = df.test
+  df.partialdep_boot %<>% 
+    bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], b_sample = b_sample, b_all = b_all,
+                             vars = topn_vars, levs = levs, quantiles = quantiles) %>% 
+                mutate(run = i))
 }
+
+
+
+## Plot
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = ylim3, colors = color)
+ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
+       w = 18, h = 12)
+
+
 
 
 #######################################################################################################################-
@@ -363,7 +360,7 @@ if (TYPE %in% c("class","regr")) {
 
 }
 
-#save.image(paste0(TYPE,"_3_interpret.rdata"))
+save.image(paste0(TYPE,"_3_interpret.rdata"))
 #load(paste0(TYPE,"_3_interpret.rdata"))
 
 
