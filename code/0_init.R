@@ -949,7 +949,8 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   df.varimp = df.varimp %>% 
     arrange(desc(perfdiff)) %>% 
     mutate(importance = 100 * perfdiff/max(perfdiff),
-           importance_cum = 100 * cumsum(perfdiff)/sum(perfdiff)) 
+           importance_cum = 100 * cumsum(perfdiff)/sum(perfdiff),
+           importance_sumnormed = 100 * perfdiff/sum(perfdiff)) 
   df.varimp 
 }
 
@@ -1020,7 +1021,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, dmatrix = TRUE,
                           feature_names = features, target_name = "target",
                           b_sample = NULL, b_all = NULL,
-                          vars = topn_vars, levs, quantiles) {
+                          vars = topn_vars, l.levs, l.quantiles) {
   #browser()
   df.partialdep = foreach(i = 1:length(vars), .combine = bind_rows, .packages = c("caret","xgboost","Matrix","dplyr"),
                           .export = c("scale_pred")) %dopar% 
@@ -1035,7 +1036,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     df.res = c()
     
     # Define grid to loop over
-    if (is.factor(df.for_partialdep[[vars[i]]])) values = levs[[vars[i]]] else values = quantiles[[vars[i]]]
+    if (is.factor(df.for_partialdep[[vars[i]]])) values = l.levs[[vars[i]]] else values = l.quantiles[[vars[i]]]
     
     # Loop over levels for nominal covariables or quantiles for metric covariables
     df.tmp = df.for_partialdep #save original data

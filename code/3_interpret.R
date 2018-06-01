@@ -271,13 +271,15 @@ ggsave(paste0(plotloc,TYPE,"_variable_importance.pdf"), marrangeGrob(plots, ncol
 
 
 #--- Compare variable importance for train and test (hints to variables prone to overfitting) -------------------------
-
-df.tmp = df.varimp[c("variable","importance")] %>% rename("train" = "importance") %>% 
-  left_join(df.varimp_train[c("variable","importance")] %>% rename("test" = "importance"), by = "variable") %>% 
-  gather(key = type, value = importance, train, test) %>% 
+impvar = "importance" #impvar = "importance_sumnormed"
+# df.tmp = df.varimp[c("variable",impvar)] %>% rename_("test" = impvar) %>% 
+#   left_join(df.varimp_train[c("variable",impvar)] %>% rename_("train" = impvar), by = "variable") %>% 
+#   gather_("type", impvar, c("train", "test")) %>% 
+#   filter(variable %in% topn_vars)
+df.tmp = df.varimp %>% select_("variable",impvar) %>% mutate(type = "test") %>% 
+  bind_rows(df.varimp_train %>% select_("variable",impvar) %>% mutate(type = "train")) %>% 
   filter(variable %in% topn_vars)
-  
-ggplot(df.tmp, aes(variable, importance)) +
+ggplot(df.tmp, aes_string("variable", impvar)) +
   geom_bar(aes(fill = type), position = "dodge", stat = "identity") +
   #scale_x_discrete(limits = rev(df.varimp$variable)) +
   scale_fill_discrete(limits = c("train","test")) +
@@ -295,7 +297,7 @@ ggplot(df.tmp, aes(variable, importance)) +
 levs = map(df.test[nomi], ~ levels(.))
 quantiles = map(df.test[metr], ~ quantile(., na.rm = TRUE, probs = seq(0,1,0.05)))
 df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
-                               vars = topn_vars, levs = levs, quantiles = quantiles)
+                               vars = topn_vars, l.levs = levs, l.quantiles = quantiles)
 
 # Visual check whether all fits 
 plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color)
