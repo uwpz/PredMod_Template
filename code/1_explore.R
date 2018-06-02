@@ -159,12 +159,9 @@ names(misspct) = map_chr(names(misspct), ~ ifelse(. %in% tolog, paste0(.,"_LOG_"
 
 # Final variable information --------------------------------------------------------------------------------------------
 
-# Univariate variable importance: ONLY for non-missing observations -> need to consider also NA-percentage!
-(varimp_metr = (filterVarImp(df[metr], df$target, nonpara = TRUE) %>% rowMeans() %>% 
-                 .[order(., decreasing = TRUE)] %>% round(2)))
-(varimp_metr_imputed = (filterVarImp(map_df(df[metr], ~ impute(.)), df$target, nonpara = TRUE) %>% rowMeans() %>% 
-                           .[order(., decreasing = TRUE)] %>% round(2)))
-
+# Univariate variable importance: with random imputation!
+(varimp_metr = (filterVarImp(map_df(df[metr], ~ impute(.)), df$target, nonpara = TRUE) %>% rowMeans() %>% 
+                  .[order(., decreasing = TRUE)] %>% round(2)))
 # Plot 
 options(warn = -1)
 plots1 = suppressMessages(get_plot_distr_metr(df, metr, color = color, 
@@ -296,8 +293,10 @@ if (TYPE == "class") nomi = setdiff(nomi, "boat_OTHER_")
 if (TYPE %in% c("regr","multiclass")) nomi = setdiff(nomi, "xxx")
 
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
-plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = cutoff, textcol = "white")
+plot = get_plot_corr(df, input_type = "nomi",  vars = setdiff(nomi, paste0("MISS_",miss)), cutoff = cutoff)
 ggsave(paste0(plotloc,TYPE,"_corr_nomi.pdf"), plot, width = 14, height = 14)
+plot = get_plot_corr(df, input_type = "nomi",  vars = paste0("MISS_",miss), cutoff = 0.98)
+ggsave(paste0(plotloc,TYPE,"_corr_nomi_MISS.pdf"), plot, width = 14, height = 14)
 if (TYPE %in% c("regr","multiclass")) {
   nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_SF","MISS_Misc_Val_LOG_",
                         "MISS_Mas_Vnr_Area","MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Total_Bsmt_SF"))
@@ -347,8 +346,7 @@ setdiff(features_binned, colnames(df))
 
 
 # Save image ----------------------------------------------------------------------------------------------------------
-rm(df.orig)
-rm(plots)
+rm(df.orig, plots, plots1, plots2)
 save.image(paste0(TYPE,"_1_explore.rdata"))
 
 

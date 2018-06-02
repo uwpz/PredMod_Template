@@ -389,7 +389,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       df.ggplot = suppressMessages(
         df.plot %>% 
           group_by_(.x, target_name) %>% 
-          summarise(y = n()) %>% 
+          summarise(y = n()) %>% ungroup() %>% complete_(c(.x, target_name), fill = list(y = 0)) %>% 
           group_by_(.x) %>% 
           mutate(y = y/sum(y)) %>% 
           left_join(df.hlp) %>% 
@@ -408,7 +408,6 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
       }
       
       # Plot
-
       p = ggplot(df.ggplot, aes_string(x = .x, y = "y", fill = target_name)) + 
         geom_bar(stat = "identity", position = ifelse(multiclass == TRUE, "fill", "stack"), 
                  width = df.ggplot$width, color = "black") +
@@ -420,6 +419,10 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
              y = paste0("Proportion Target")) +
         coord_flip() +
         theme_my 
+      if (!is.null(ylim)) p = p + ylim(ylim)
+      
+      # Get underlying data for max of y-value and range of x-value
+      yrange = ggplot_build(p)$layout$panel_ranges[[1]]$x.range
       
       if (inner_barplot) {   
         # Inner Barplot
@@ -431,7 +434,7 @@ get_plot_distr_nomi = function(df.plot = df, vars = nomi, target_name = "target"
         
         # Put all together
         p = p + 
-          scale_y_continuous(limits = c(-0.2,NA)) +
+          scale_y_continuous(limits = c(yrange[1] - 0.2*(yrange[2] - yrange[1]), ifelse(length(ylim), ylim[2], NA))) +
           theme_my +
           annotation_custom(ggplotGrob(p.inner), xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0) +
           geom_hline(yintercept = 0, size = 0.5, colour = "black", linetype = 1)
