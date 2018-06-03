@@ -571,6 +571,7 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
                                 colors = twocol, gradcol = hexcol, color = "blue",
                                 ylim = NULL) {
   
+  #browser()
   ## Classification
   if (is.factor(y)) {
     # Derive predicted class
@@ -588,8 +589,8 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
       # Prepare
       df.distr = data.frame(target = factor(lev, levels = levels(y)), 
                             y = as.factor(ifelse(y == lev, "Y", "N")), yhat = yhat[[lev]])
-      
-      df.calib = calibration(y~yhat, data.frame(y = df.distr$y, yhat = 1 - df.distr$yhat), 
+    
+      df.calib = calibration(y~yhat, df.distr[c("y","yhat")], class = "Y",
                              cuts = quantile(df.distr$yhat, quantiles))$data
       df.calib$target = factor(lev, levels = levels(y))
       
@@ -689,7 +690,7 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
     p_confu = ggplot(df.confu, aes(Prediction, Reference)) +
       geom_tile(aes(fill = Freq)) + 
       geom_text(aes(label = Freq)) +
-      scale_fill_gradient(low = "white", high = "blue") +
+      scale_fill_gradient(low = "white", high = "darkgrey") +
       scale_y_discrete(limits = rev(levels(df.confu$Reference))) +
       labs(title = paste0("Confusion Matrix (Accuracy = ", round(conf_obj$overall["Accuracy"], 3), ")")) +
       theme_my 

@@ -315,7 +315,7 @@ for (i in 1:n.boot) {
   #df.test_boot = df.test
   df.partialdep_boot %<>% 
     bind_rows(get_partialdep(df.test_boot, l.boot[[paste0("fit_",i)]], b_sample = b_sample, b_all = b_all,
-                             vars = topn_vars, levs = levs, quantiles = quantiles) %>% 
+                             vars = topn_vars, l.levs = levs, l.quantiles = quantiles) %>% 
                 mutate(run = i))
 }
 
