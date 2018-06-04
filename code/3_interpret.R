@@ -349,7 +349,7 @@ if (TYPE %in% c("class","regr")) {
   df.test_explain = df.test[i.explain, c("id", features)]
   
   # Get explanations
-  df.explanations = get_explanations(type = TYPE)
+  df.explanations = get_explanations(b_sample = b_sample, b_all = b_all, type = TYPE)
   
   
   ## Plot

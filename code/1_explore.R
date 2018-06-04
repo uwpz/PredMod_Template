@@ -1,13 +1,3 @@
-#TODO: function impute, varimp_impute
-
-skip = function() {
-  # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-  TYPE = "class"
-  TYPE = "regr"
-  TYPE = "multiclass"
-}
-
-
 
 #######################################################################################################################-
 #|||| Initialize ||||----

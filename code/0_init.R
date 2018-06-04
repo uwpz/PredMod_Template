@@ -1254,6 +1254,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 
 ## Get explanations data
 get_explanations = function(fit.for_explain = fit,
+                            b_sample = NULL, b_all = NULL,
                             df.train_explain = df.train[features], 
                             df.test_explain = df.test[i.explain, c("id", features)],
                             preds = yhat_explain[i.explain],
@@ -1283,7 +1284,8 @@ get_explanations = function(fit.for_explain = fit,
   ## Get explanations for predictions of test data
   df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, dm.test_explain)
   if (type == "class") {
-    df.predictions$intercept = logit(scale_pred(inv.logit(df.predictions$intercept), b_sample, b_all)[2])
+    tmp = inv.logit(df.predictions$intercept)
+    df.predictions$intercept = logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
   }
   
   # Aggregate predictions for all nominal variables
