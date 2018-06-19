@@ -134,7 +134,9 @@ impute = function(variable, type = "random") {
     # Random imputation: better for interpretation
     if (type == "random") variable[i.na] = sample(variable[-i.na], length(i.na) , replace = TRUE) 
     # Median imputation: better in case of scoring
-    variable[i.na] = median(variable[-i.na], na.rm = TRUE) 
+    if (type == "median") variable[i.na] = median(variable[-i.na], na.rm = TRUE) 
+    # Zero imputation
+    if (type == "zero") variable[i.na] = 0 
   }
   variable 
 }
@@ -1162,7 +1164,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         scale_x_discrete(labels = paste0(as.character(df.hlp[[.x]]), " (", round(100 * df.hlp[["prop"]],1), "%)")) +
         geom_hline(yintercept = refs, linetype = 2, color = "darkgrey") +
         labs(title = .x, x = "", y = expression(hat(y))) +
-        coord_flip() +
+        coord_flip(ylim = ylim) +
         theme_my
 
     } else {

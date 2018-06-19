@@ -314,7 +314,7 @@ df.lc_result = foreach(i = 1:to, .combine = bind_rows,
   # Balanced ("as long as possible")
   c(df.train, b_sample, b_all) %<-%
       undersample_n(df.lc %>% filter(fold == "train"),
-                    n_maxpersample = chunks_pct[i]/100 * max(summary(df.lc[df.lc$fold == "train","target"])))
+                    n_maxpersample = chunks_pct[i]/100 * max(summary(df.lc[df.lc$fold == "train",][["target"]])))
   df.test = df.lc %>% filter(fold == "test") #%>% sample_n(500)
   
   

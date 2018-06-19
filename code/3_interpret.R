@@ -16,19 +16,17 @@ load(paste0(TYPE,"_1_explore.rdata"))
 # Load libraries and functions
 source("./code/0_init.R")
 
-# Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob")
-color = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol)
-ylim1 = switch(TYPE, "class" = c(-1,1), "regr"  = c(-5e4,5e4), "multiclass" = c(-1,1))
-ylim2 = switch(TYPE, "class" = c(0,1), "regr"  = NULL, "multiclass" = c(0,1))
-ylim3 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.1,0.4))
-topn = switch(TYPE, "class" = 10, "regr" = 20, "multiclass" = 20)
-#target_name = switch(TYPE, "class" = "target", "regr"  = "target", "multiclass" = "target_onelev")
-b_all = b_sample = NULL
+# Adapt some default parameter different for target types -> probably also different for a new use-case
+type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob") #do not change this one
+color = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol) #probably need to change multiclass opt
+ylim1 = switch(TYPE, "class" = c(0,1), "regr"  = c(-5e4,5e4), "multiclass" = c(0,1))
+ylim2 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.1,0.4)) #need to adapt
+topn = switch(TYPE, "class" = 10, "regr" = 20, "multiclass" = 20) #remove here and set hard below
+b_all = b_sample = NULL #do not change this one (as it is default in regression case)
 
-plotloc = paste0(plotloc,TYPE,"/")
 
-# Initialize parallel processing
+
+## Initialize parallel processing
 closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
 cl = makeCluster(4)
@@ -48,6 +46,7 @@ if (TYPE %in% c("regr","multiclass")) {
                         eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
                         min_child_weight = 5, subsample = 0.7)
 }
+
 
 
 
@@ -118,18 +117,17 @@ ggsave(paste0(plotloc,TYPE,"_performance.pdf"), marrangeGrob(plots, ncol = lengt
 #---- Check residuals ----------------------------------------------------------------------------------
 
 ## Residuals
-if (TYPE == "class") df.test$residual = ifelse(y_test == levels(y_test)[2], 1, 0) - yhat_test[,2]
-if (TYPE == "multiclass") {
+if (TYPE %in% c("class","multiclass")) {
   # Decide for a reference member
-  levels(y_test)
-  k = 2
-  df.test$residual = ifelse(y_test == levels(y_test)[k], 1, 0) - yhat_test[,k]
-  # Alternative: dynamic refernce member per obs, i.e. the true label
+  #levels(y_test);  k = 2;  df.test$residual = ifelse(y_test == levels(y_test)[k], 1, 0) - yhat_test[,k]
+  # Preferred: dynamic refernce member per obs, i.e. the true label
   df.test$residual = 1 - rowSums(yhat_test * model.matrix(~ -1 + y_test, data.frame(y_test)))
 }
 if (TYPE == "regr") df.test$residual = y_test - yhat_test
 df.test$abs_residual = abs(df.test$residual)
 summary(df.test$residual)
+
+# For non-regr tasks one might want to plot the following for each target level (df.test %>% filter(target == "level"))
 plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "residual", ylim = ylim1, 
                                                missinfo = misspct, color = hexcol)), 
           suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "residual", ylim = ylim1,
@@ -139,14 +137,15 @@ ggsave(paste0(plotloc,TYPE,"_diagnosis_residual.pdf"), marrangeGrob(plots, ncol 
 
 
 ## Absolute residuals
-summary(df.test$abs_residual)
-plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "abs_residual", ylim = ylim2, 
-                                               missinfo = misspct, color = hexcol)), 
-          suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = ylim2,
-                                               color = color)))
-ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
-       width = 18, height = 12)
-
+if (TYPE == "regr") {
+  summary(df.test$abs_residual)
+  plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "abs_residual", ylim = NULL, 
+                                                 missinfo = misspct, color = hexcol)), 
+            suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = NULL,
+                                                 color = color)))
+  ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
+         width = 18, height = 12)
+}
 
 
 
@@ -271,20 +270,18 @@ ggsave(paste0(plotloc,TYPE,"_variable_importance.pdf"), marrangeGrob(plots, ncol
 
 
 #--- Compare variable importance for train and test (hints to variables prone to overfitting) -------------------------
-impvar = "importance" #impvar = "importance_sumnormed"
-# df.tmp = df.varimp[c("variable",impvar)] %>% rename_("test" = impvar) %>% 
-#   left_join(df.varimp_train[c("variable",impvar)] %>% rename_("train" = impvar), by = "variable") %>% 
-#   gather_("type", impvar, c("train", "test")) %>% 
-#   filter(variable %in% topn_vars)
-df.tmp = df.varimp %>% select_("variable",impvar) %>% mutate(type = "test") %>% 
-  bind_rows(df.varimp_train %>% select_("variable",impvar) %>% mutate(type = "train")) %>% 
-  filter(variable %in% topn_vars)
-ggplot(df.tmp, aes_string("variable", impvar)) +
-  geom_bar(aes(fill = type), position = "dodge", stat = "identity") +
-  #scale_x_discrete(limits = rev(df.varimp$variable)) +
-  scale_fill_discrete(limits = c("train","test")) +
-  coord_flip()
-
+for (impvar in c("importance","importance_sumnormed")) {
+  #impvar = "importance" #impvar = "importance_sumnormed"
+  df.tmp = df.varimp %>% select_("variable",impvar) %>% mutate(type = "test") %>% 
+    bind_rows(df.varimp_train %>% select_("variable",impvar) %>% mutate(type = "train")) %>% 
+    filter(variable %in% topn_vars)
+  ggplot(df.tmp, aes_string("variable", impvar)) +
+    geom_bar(aes(fill = type), position = "dodge", stat = "identity") +
+    #scale_x_discrete(limits = rev(df.varimp$variable)) +
+    scale_fill_discrete(limits = c("train","test")) +
+    coord_flip() +
+    labs(title = impvar)
+}
 
 
 #######################################################################################################################-
@@ -300,7 +297,7 @@ df.partialdep = get_partialdep(df.test, fit, b_sample = b_sample, b_all = b_all,
                                vars = topn_vars, l.levs = levs, l.quantiles = quantiles)
 
 # Visual check whether all fits 
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim3, colors = color)
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.for_partialdep = df.test, ylim = ylim2, colors = color)
 ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
@@ -322,7 +319,7 @@ for (i in 1:n.boot) {
 
 
 ## Plot
-plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = ylim3, colors = color)
+plots = get_plot_partialdep(df.partialdep, topn_vars, df.plot_boot = df.partialdep_boot, ylim = ylim2, colors = color)
 ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol = 4, nrow = 2), 
        w = 18, h = 12)
 
@@ -356,7 +353,7 @@ if (TYPE %in% c("class","regr")) {
   df.values = df.test_explain
   df.values[metr] = map(df.values[metr], ~ round(.,2))
   plots = get_plot_explanations(df.plot = df.explanations, df.values = df.values, type = TYPE, topn = 10, 
-                                ylim = ylim2)
+                                ylim = ylim1)
   ggsave(paste0(plotloc,TYPE,"_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
          w = 18, h = 12)
 

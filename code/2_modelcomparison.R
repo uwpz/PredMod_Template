@@ -1,6 +1,6 @@
 
 skip = function() {
-  # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
+  # Set target type -> ADAPT IF-ELSE PARTS AT APPROPRIATE LOCATION FOR A USE-CASE
   TYPE = "class"
   TYPE = "regr"
   TYPE = "multiclass"
@@ -18,20 +18,22 @@ load(paste0(TYPE,"_1_explore.rdata"))
 source("./code/0_init.R")
 
 # Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-splitrule = switch(TYPE, "class" = "gini", "regr" = "variance", "multiclass" = "gini")
-type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob")
-plotloc = paste0(plotloc,TYPE,"/")
+splitrule = switch(TYPE, "class" = "gini", "regr" = "variance", "multiclass" = "gini") #do not change this one
+type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob") #do not change this one
 
-# Initialize parallel processing
+# Set metric for peformance comparison
+if (TYPE %in% c("class","multiclass")) metric = "AUC"
+if (TYPE == "regr") metric = "spearman"
+
+
+
+## Initialize parallel processing
 closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
 cl = makeCluster(4)
 registerDoParallel(cl) 
 # stopCluster(cl); closeAllConnections() #stop cluster
 
-# Set metric for peformance comparison
-if (TYPE %in% c("class","multiclass")) metric = "AUC"
-if (TYPE == "regr") metric = "spearman"
 
   
 
@@ -355,7 +357,7 @@ df.lc_result = foreach(i = 1:to, .combine = bind_rows,
     ## Balanced ("as long as possible")
     #c(df.train, b_sample, b_all) %<-% 
     #    undersample_n(df.lc %>% filter(fold == "train"), 
-    #                  n_maxpersample = chunks_pct[i]/100 * max(summary(df.lc[df.lc$fold == "train","target"])))
+    #                  n_maxpersample = chunks_pct[i]/100 * max(summary(df.lc[df.lc$fold == "train",][["target"]])))
   }
   if (TYPE == "regr") b_sample = b_all = NULL 
   df.test = df.lc %>% filter(fold == "test") #%>% sample_n(500)

@@ -22,11 +22,9 @@ library(Matrix)
 
 ## Functions
 
-# Calculate probabilty on all data from probabilt from sample data and the corresponding (prior) base probabilities 
-prob_samp2full = function(p_sample, b_sample, b_all) {
-  p_all = b_all * ((p_sample - p_sample*b_sample) / 
-                     (b_sample - p_sample*b_sample + b_all*p_sample - b_sample*b_all))
-  p_all
+# Calculate predictions from probability of sample data and the corresponding base probabilities (classification)
+scale_pred = function(yhat, b_sample = NULL, b_all = NULL) {
+  as.data.frame(t(t(as.matrix(yhat)) * (b_all / b_sample))) %>% (function(x) x/rowSums(x))
 }
 
 
@@ -48,10 +46,10 @@ load(file = paste0(dataloc,"METADATA.RData"))
 
 
 
-# Adapt nominal variables ----------------------------------------------------------------------------------
+# Adapt nominal variables: Order of following steps is very important! -----------------------------------------------
 
 # Define nominal features
-nomi = l.metadata$predictors$nomi
+nomi = l.metadata$features$nomi
 
 # Make them character
 df[nomi] = map(df[nomi], ~ as.character(.))
@@ -62,50 +60,46 @@ df[nomi] = map(df[nomi], ~ ifelse(is.na(.), "(Missing)", .))
 # Create encoded variables
 toomany = names(l.metadata$nomi$encoding)
 df[paste0(toomany,"_ENCODED")] = map(toomany, ~ ifelse(df[[.]] %in% names(l.metadata$nomi$encoding[[.]]), 
-                                                       df[[.]], "_OTHER_"))
+                                                       df[[.]], "_OTHER_")) #map unknown content to _OTHER_
 df[paste0(toomany,"_ENCODED")] = map(toomany, ~ {l.metadata$nomi$encoding[[.]][df[[paste0(.,"_ENCODED")]]]})
+#TODO: Arncoding
 
-# Map unknown content to _OTHER_: TODO
+# Map (now for nomi) unknown content to _OTHER_
 df[nomi] = map(nomi, ~ ifelse(df[[.]] %in% l.metadata$nomi$levels[[.]], df[[.]], "_OTHER_"))
 
-# Make them factors with same levels as for training
+# Map nomi to factors with same levels as for training
 df[nomi] = map(nomi, ~ factor(df[[.]], l.metadata$nomi$levels[[.]]))
-
 
 
 
 
 # Adapt metric variables ----------------------------------------------------------------------------------
 
-metr = l.metadata$predictors$metr
+metr = l.metadata$features$metr
 
+# Impute
+mins = l.metadata$metr$mins
+if (length(mins)) df[names(mins)] = map(names(mins), ~ df[[.]] + mins[.] + 1) #shift
+df[metr] = map(df[metr], ~ impute(., type = "zero"))
 
-# Define predictors
-predictors = c(metr, nomi, paste0(toomany,"_ENCODED"))
 
 
 #######################################################################################################################-
 #|||| Score ||||----
 #######################################################################################################################-
 
-# Score and rescale ----------------------------------------------------------------------------------
+# Define features
+features = c(metr, nomi, paste0(toomany,"_ENCODED"))
 
-formula_rightside = as.formula(paste("~", paste(predictors, collapse = " + ")))
+# Score and rescale 
+formula_rightside = as.formula(paste("~", paste(features, collapse = " + ")))
 options(na.action = "na.pass")
-dm = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df[predictors]))
+DM.score = xgb.DMatrix(sparse.model.matrix(formula_rightside, data = df[features]))
 options(na.action = "na.omit")
-yhat_score = prob_samp2full(predict(l.metadata$fit, dm, type="prob")[[2]], 
-                            l.metadata$sample$b_sample, l.metadata$sample$b_all)
-# # Rescale 
-# for (lev in colnames(yhat_score)) {yhat_score[[lev]] = 
-#   yhat_score[[lev]] * l.metadata$sample$b_all[lev] / l.metadata$sample$b_sample[lev]}
-# yhat_score = yhat_score / rowSums(yhat_score)
+yhat_score = scale_pred(predict(l.metadata$fit, DM.score, type="prob"), 
+                        l.metadata$sample$b_sample, l.metadata$sample$b_all)
 
-
-
-
-# Write scored data ----------------------------------------------------------------------------------
-
-df.score = bind_cols(df[c("id")], "score" = round(yhat_score, 5))
+# Write scored data 
+df.score = bind_cols(df[c("id")], "score" = round(yhat_score[,2], 5))
 write_delim(df.score, paste0(dataloc,"scoreddata.psv"), delim = "|")
 
