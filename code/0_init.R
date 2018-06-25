@@ -64,7 +64,7 @@ plotloc = "./output/"
 
 
 # Colors
-twocol = c("blue","red")
+twocol = c("red","darkgreen")
 threeDcol = colorRampPalette(c("cyan", "white", "magenta"))(100)
 hexcol = colorRampPalette(c("white", "blue", "yellow", "red"))(100)
 manycol = c('#00FF00','#0000FF','#FF0000','#01FFFE','#FFA6FE','#FFDB66','#006401','#010067','#95003A',
@@ -75,7 +75,7 @@ manycol = c('#00FF00','#0000FF','#FF0000','#01FFFE','#FFA6FE','#FFDB66','#006401
             '#008F9C','#98FF52','#7544B1','#B500FF','#00FF78','#FF6E41','#005F39','#6B6882','#5FAD4E','#A75740',
             '#A5FFD2','#FFB167','#009BFF','#E85EBE')
 #barplot(1:length(manycol), col = manycol)
-fourcol = c("#F8766D","#00BA38","#619CFF","#B79F00")
+threecol = c("#00BA38","#B79F00","#F8766D")
 
 # Themes
 theme_my = theme_bw() +  theme(plot.title = element_text(hjust = 0.5))
@@ -569,7 +569,7 @@ get_plot_corr <- function(df.plot = df, input_type = "metr" , vars = metr, cutof
 
 
 ## Get plot list for ROC, Confusion, Distribution, Calibration, Gain, Lift, Precision-Recall, Precision
-get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.05, 0.95, 0.1),
+get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0.1, 0.9, 0.1),
                                 colors = twocol, gradcol = hexcol, color = "blue",
                                 ylim = NULL) {
   
@@ -704,7 +704,8 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
       scale_fill_manual(values = alpha(c("blue","red"), .2), name = "Target (y)") + 
       scale_color_manual(values = c("blue","red"), name = "Target (y)") +
       labs(title = "Predictions", x = expression(paste("Prediction (", hat(y),")", sep = ""))) +
-      guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
+      #guides(fill = guide_legend(reverse = TRUE), color = guide_legend(reverse = TRUE)) +
+      theme(legend.position = "none") +
       facet_wrap("target", scales = "free")
     
     # Gain + Lift
@@ -979,8 +980,9 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
          x = "", y = "Importance (scaled to 100)") +
     coord_flip() +
     guides(fill = guide_legend(reverse = TRUE, title = "")) +
-    theme_my   
-  
+    theme_my +    
+    scale_y_continuous(breaks = seq(0,100,20))
+ 
   # Add boostrap information
   if (!is.null(df.plot_boot)) {
     # Add bootstrap lines
@@ -1015,7 +1017,8 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
          x = "", y = "Cumulative Importance (in %)") +
     coord_flip(ylim = c(0, 100)) +
     guides(fill = guide_legend(reverse = TRUE, title = "")) +
-    theme_my 
+    theme_my +
+    scale_y_continuous(breaks = seq(0,100,20))
   
   plots = list(p_imp, p_impcum)
   plots
@@ -1111,7 +1114,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
   
   # Adapt color
   #if (type != "regr") colors = rev(colors) else colors = colors[length(colors)]
-  colors = rev(colors)
+  if (type == "class") colors = colors[length(colors)]
   
   # Plot
   plots = map(vars, ~ {
@@ -1137,8 +1140,9 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       
       # Proportion nominal variable
       df.hlp = df.for_partialdep %>% 
-        group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% 
+        group_by_(.x) %>% summarise(n = n()) %>% ungroup() %>% complete_(c(.x), fill = list(n = 0)) %>% 
         mutate(prop = n/sum(n), width = n/max(n))
+      
       
       # Adapt value to .x
       df.ggplot[[.x]] = factor(as.character(df.ggplot$value), levels = levels(df.for_partialdep[[.x]])) 
@@ -1155,7 +1159,9 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         df.ggplot[[target_name]] = "target"
         if (!is.null(df.plot_boot)) df.ggplot_boot[[target_name]] = "target"
       }
-    
+      
+      #if (type == "class") df.hlp = df.ggplot #fix problem with missing combinations
+      
       # Plot 
       p = ggplot(df.ggplot, aes_string(x = .x, y = "yhat", fill = target_name)) + 
         geom_bar(stat = "identity", position = ifelse(type == "multiclass", "fill", "stack"), 
@@ -1190,6 +1196,8 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                      data = df.for_partialdep, fill = alpha("grey", 0.3), color = alpha("grey", 0.3)) +
         geom_line(aes_string(y = "yhat")) +
         geom_point(aes_string(y = "yhat")) +
+        #scale_color_manual(limits = rev(levs_target), values = rev(color), name = target_name) +
+        scale_color_manual(values = colors, name = target_name) +
         geom_rug(aes_string(.x), df.ggplot, sides = "b", col = "darkgrey") +
         geom_hline(yintercept = refs, linetype = 2, color = "darkgrey") +
         labs(title = .x, x = "", y = expression(hat(y))) +
@@ -1217,7 +1225,10 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       if (bootstrap_lines == TRUE) {
         p = p +
           geom_line(aes_string(x = .x, y = "yhat", color = target_name, group = "group"), data = df.ggplot_boot, 
-                   size = 0.1, alpha = 0.2, show.legend = FALSE) #+
+                    linetype = 3, 
+                    #size = 0.1, alpha = 0.2, 
+                    show.legend = FALSE) +
+          scale_color_manual(values = colors, name = target_name) #+
           #geom_line(aes_string(y = "yhat", group = run_name)) + #plot red lines again
           #geom_point(aes_string(y = "yhat", group = run_name)) #plot red dots again
       }
@@ -1243,7 +1254,9 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         } else {
           p = p +
             geom_ribbon(aes_string(x = .x, ymin = "lci", ymax = "rci", fill = target_name, color = target_name), 
-                        data = df.help, alpha = 0.1, show.legend = FALSE)
+                        data = df.help, alpha = 0.1, show.legend = FALSE) +
+            scale_color_manual(values = colors, name = target_name) +
+            scale_fill_manual(values = colors, name = target_name) 
         }
       }
     }
@@ -1316,6 +1329,7 @@ get_explanations = function(fit.for_explain = fit,
 ## Get plot list for xgboost explainer
 get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_explain, 
                                  id_name = "id", type = "class", ylim = c(0.01, 0.99), 
+                                 fillcol = alpha(c("darkgreen","red"), 0.5),
                                  threshold = NULL, topn = NULL) {
   
   # Prepare
@@ -1342,7 +1356,7 @@ get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_e
                       gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
     mutate(variableandvalue = ifelse(variable %in% c("intercept","..... the rest"), 
                              variable, paste0(variable," = ",value)))
-  
+
   plots = map(df.plot[[id_name]], ~ {
     #.x = df.plot[1,"id"]
     print(.x)
@@ -1350,6 +1364,8 @@ get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_e
     df.waterfall = df.ggplot %>% filter_(paste0(id_name, "==", .x))
     p = waterfall(values = df.waterfall$beta, rect_text_labels = round(df.waterfall$beta, 2), 
                   labels = df.waterfall$variableandvalue, total_rect_text = round(sum(df.waterfall$beta), 2),
+                  fill_by_sign = FALSE,
+                  fill_colours = ifelse(df.waterfall$beta >= 0, fillcol[1], fillcol[2]),
                   calc_total = TRUE, total_axis_text = "Prediction") + 
       labs(title = paste0(id_name, " = ", .x)) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),

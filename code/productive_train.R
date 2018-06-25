@@ -256,11 +256,6 @@ skip = function() {
                                     summaryFunction = mysummary, classProbs = TRUE, 
                                     indexFinal = sample(1:nrow(df.train), 100)) #"Fast" final fit!!!
   formula_rightside = as.formula(paste("~", paste(features, collapse = " + ")))
-  
-  
-  df.train$age[-c(1:1)] = 0
-  df.train$fare[1] = 0
-  
   options(na.action = "na.pass")
   m.train = sparse.model.matrix(formula_rightside, data = df.train[features])
   options(na.action = "na.omit")

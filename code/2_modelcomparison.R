@@ -1,9 +1,10 @@
 
 skip = function() {
   # Set target type -> ADAPT IF-ELSE PARTS AT APPROPRIATE LOCATION FOR A USE-CASE
-  TYPE = "class"
-  TYPE = "regr"
-  TYPE = "multiclass"
+  rm(list = ls())
+  TYPE = "CLASS"
+  TYPE = "REGR"
+  TYPE = "MULTICLASS"
 }
 
 
@@ -18,12 +19,12 @@ load(paste0(TYPE,"_1_explore.rdata"))
 source("./code/0_init.R")
 
 # Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-splitrule = switch(TYPE, "class" = "gini", "regr" = "variance", "multiclass" = "gini") #do not change this one
-type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob") #do not change this one
+splitrule = switch(TYPE, "CLASS" = "gini", "REGR" = "variance", "MULTICLASS" = "gini") #do not change this one
+type = switch(TYPE, "CLASS" = "prob", "REGR" = "raw", "MULTICLASS" = "prob") #do not change this one
 
 # Set metric for peformance comparison
-if (TYPE %in% c("class","multiclass")) metric = "AUC"
-if (TYPE == "regr") metric = "spearman"
+if (TYPE %in% c("CLASS","MULTICLASS")) metric = "AUC"
+if (TYPE == "REGR") metric = "spearman"
 
 
 
@@ -44,13 +45,13 @@ registerDoParallel(cl)
 
 # Sample data --------------------------------------------------------------------------------------------
 
-if (TYPE %in% c("class","multiclass")) {
+if (TYPE %in% c("CLASS","MULTICLASS")) {
   # Just take data from train fold (take all but n_maxpersample at most)
   summary(df[df$fold == "train", "target"])
   c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 500)) 
   summary(df.train$target); b_sample; b_all
 }
-if (TYPE == "regr") {
+if (TYPE == "REGR") {
   # Just take data from train fold
   df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
 }
@@ -104,7 +105,7 @@ plot(fit)
 # -> keep around the recommended values: mtry(class) = sqrt(length(features), mtry(regr) = 0.3 * length(features))
 
 
-if (TYPE != "multiclass") {
+if (TYPE != "MULTICLASS") {
   fit = train(as.data.frame(df.train[features]), df.train$target,
               trControl = ctrl_idx_fff, metric = metric,
               method = ms_forest,
@@ -126,7 +127,7 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features
                                    min_child_weight = c(2,5,10), subsample = c(0.3,0.7)))
 plot(fit)
 
-if (TYPE != "multiclass") {
+if (TYPE != "MULTICLASS") {
   fit = train(df.train[features], df.train$target,
               trControl = ctrl_idx_fff, metric = metric,
               method = ms_boosttree,
@@ -196,12 +197,12 @@ skip = function() {
 df.sim = df #%>% sample_n(1000)
 
 # Tunegrid
-if (TYPE == "class") {
+if (TYPE == "CLASS") {
   tunepar = expand.grid(nrounds = seq(100,500,200), max_depth = 3, 
                         eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
                         min_child_weight = 2, subsample = 0.7)
 }
-if (TYPE %in% c("regr","multiclass")) {
+if (TYPE %in% c("REGR","MULTICLASS")) {
   tunepar = expand.grid(nrounds = seq(100,500,200), max_depth = 6, 
                         eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
                         min_child_weight = 5, subsample = 0.7)
@@ -291,7 +292,7 @@ perfcomp = function(method, nsim = 5) {
 #---- Simulate --------------------------------------------------------------------------------------------
 
 df.sim_result = as.data.frame(c())
-nsim = 5
+nsim = 10
 df.sim_result = bind_rows(df.sim_result, perfcomp(method = "glmnet", nsim = nsim) )   
 df.sim_result = bind_rows(df.sim_result, perfcomp(method = "xgbTree", nsim = nsim))       
 #df.sim_result = bind_rows(df.sim_result, perfcomp(method = "deepLearning", nsim = nsim))       
@@ -325,12 +326,12 @@ ggsave(paste0(plotloc,TYPE,"_model_comparison.pdf"), p, width = 12, height = 8)
 df.lc = df #%>% sample_n(1000)
 
 # Tunegrid
-if (TYPE == "class") {
+if (TYPE == "CLASS") {
   tunepar = expand.grid(nrounds = seq(100,500,100), max_depth = 3, 
                         eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
                         min_child_weight = 2, subsample = 0.7)
 }
-if (TYPE %in% c("regr","multiclass")) {
+if (TYPE %in% c("REGR","MULTICLASS")) {
   tunepar = expand.grid(nrounds = seq(100,500,100), max_depth = 3, #3 or 6
                         eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
                         min_child_weight = 5, subsample = 0.7)
@@ -352,14 +353,14 @@ df.lc_result = foreach(i = 1:to, .combine = bind_rows,
   ## Sample
   set.seed(chunks_pct[i])
   df.train = df.lc %>% filter(fold == "train") %>% sample_frac(chunks_pct[i]/100)
-  if (TYPE %in% c("class","multiclass")) {
+  if (TYPE %in% c("CLASS","MULTICLASS")) {
     b_sample = b_all = df.train$target %>% (function(.) {summary(.)/length(.)})
     ## Balanced ("as long as possible")
     #c(df.train, b_sample, b_all) %<-% 
     #    undersample_n(df.lc %>% filter(fold == "train"), 
     #                  n_maxpersample = chunks_pct[i]/100 * max(summary(df.lc[df.lc$fold == "train",][["target"]])))
   }
-  if (TYPE == "regr") b_sample = b_all = NULL 
+  if (TYPE == "REGR") b_sample = b_all = NULL 
   df.test = df.lc %>% filter(fold == "test") #%>% sample_n(500)
   
   

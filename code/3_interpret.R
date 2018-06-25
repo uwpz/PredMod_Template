@@ -1,9 +1,10 @@
 
 skip = function() {
   # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-  TYPE = "class"
-  TYPE = "regr"
-  TYPE = "multiclass"
+  rm(list = ls())
+  TYPE = "CLASS"
+  TYPE = "REGR"
+  TYPE = "MULTICLASS"
 }
 
 #######################################################################################################################-
@@ -17,11 +18,12 @@ load(paste0(TYPE,"_1_explore.rdata"))
 source("./code/0_init.R")
 
 # Adapt some default parameter different for target types -> probably also different for a new use-case
-type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob") #do not change this one
-color = switch(TYPE, "class" = twocol, "regr" = twocol, "multiclass" = fourcol) #probably need to change multiclass opt
-ylim1 = switch(TYPE, "class" = c(0,1), "regr"  = c(-5e4,5e4), "multiclass" = c(0,1))
-ylim2 = switch(TYPE, "class" = c(0.2,0.7), "regr"  = c(1.5e5,2.5e5), "multiclass" = c(0.1,0.4)) #need to adapt
-topn = switch(TYPE, "class" = 10, "regr" = 20, "multiclass" = 20) #remove here and set hard below
+type = switch(TYPE, "CLASS" = "prob", "REGR" = "raw", "MULTICLASS" = "prob") #do not change this one
+color = switch(TYPE, "CLASS" = twocol, "REGR" = twocol, "MULTICLASS" = threecol) #probably need to change multiclass opt
+ylim1 = switch(TYPE, "CLASS" = c(0,1), "REGR"  = c(-5e4,5e4), "MULTICLASS" = c(0,1))
+ylim2 = switch(TYPE, "CLASS" = c(0.2,0.7), "REGR"  = c(1.5e5,2.5e5), "MULTICLASS" = c(0,1)) #need to adapt
+ylim3 = switch(TYPE, "CLASS" = c(0,1), "REGR"  = c(0,5e5), "MULTICLASS" = c(0,1))
+topn = switch(TYPE, "CLASS" = 10, "REGR" = 20, "MULTICLASS" = 20) #remove here and set hard below
 b_all = b_sample = NULL #do not change this one (as it is default in regression case)
 
 
@@ -36,12 +38,12 @@ registerDoParallel(cl)
 
 
 ## Tuning parameter to use
-if (TYPE == "class") {
+if (TYPE == "CLASS") {
   tunepar = expand.grid(nrounds = 500, max_depth = 3, 
                         eta = 0.01, gamma = 0, colsample_bytree = 0.7, 
                         min_child_weight = 2, subsample = 0.7)
 }
-if (TYPE %in% c("regr","multiclass")) {
+if (TYPE %in% c("REGR","MULTICLASS")) {
   tunepar = expand.grid(nrounds = 500, max_depth = 3, 
                         eta = 0.05, gamma = 0, colsample_bytree = 0.3, 
                         min_child_weight = 5, subsample = 0.7)
@@ -53,7 +55,7 @@ if (TYPE %in% c("regr","multiclass")) {
 # Sample data --------------------------------------------------------------------------------------------
 
 # Training data
-if (TYPE %in% c("class","multiclass")) {
+if (TYPE %in% c("CLASS","MULTICLASS")) {
   # Just take data from train fold (take all but n_maxpersample at most)
   summary(df[df$fold == "train", "target"])
   c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 500)) 
@@ -62,7 +64,7 @@ if (TYPE %in% c("class","multiclass")) {
   # Set metric for peformance comparison
   metric = "AUC"
 }
-if (TYPE == "regr") {
+if (TYPE == "REGR") {
   # Just take data from train fold
   df.train = df %>% filter(fold == "train") #%>% sample_n(1000)
 
@@ -117,13 +119,13 @@ ggsave(paste0(plotloc,TYPE,"_performance.pdf"), marrangeGrob(plots, ncol = lengt
 #---- Check residuals ----------------------------------------------------------------------------------
 
 ## Residuals
-if (TYPE %in% c("class","multiclass")) {
+if (TYPE %in% c("CLASS","MULTICLASS")) {
   # Decide for a reference member
   #levels(y_test);  k = 2;  df.test$residual = ifelse(y_test == levels(y_test)[k], 1, 0) - yhat_test[,k]
   # Preferred: dynamic refernce member per obs, i.e. the true label
   df.test$residual = 1 - rowSums(yhat_test * model.matrix(~ -1 + y_test, data.frame(y_test)))
 }
-if (TYPE == "regr") df.test$residual = y_test - yhat_test
+if (TYPE == "REGR") df.test$residual = y_test - yhat_test
 df.test$abs_residual = abs(df.test$residual)
 summary(df.test$residual)
 
@@ -137,11 +139,11 @@ ggsave(paste0(plotloc,TYPE,"_diagnosis_residual.pdf"), marrangeGrob(plots, ncol 
 
 
 ## Absolute residuals
-if (TYPE == "regr") {
+if (TYPE == "REGR") {
   summary(df.test$abs_residual)
-  plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "abs_residual", ylim = NULL, 
+  plots = c(suppressMessages(get_plot_distr_metr(df.test, metr, target_name = "abs_residual", ylim = c(0,ylim1[2]), 
                                                  missinfo = misspct, color = hexcol)), 
-            suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = NULL,
+            suppressMessages(get_plot_distr_nomi(df.test, nomi, target_name = "abs_residual", ylim = c(0,ylim1[2]),
                                                  color = color)))
   ggsave(paste0(plotloc,TYPE,"_diagnosis_absolute_residual.pdf"), marrangeGrob(plots, ncol = 4, nrow = 3), 
          width = 18, height = 12)
@@ -270,6 +272,7 @@ ggsave(paste0(plotloc,TYPE,"_variable_importance.pdf"), marrangeGrob(plots, ncol
 
 
 #--- Compare variable importance for train and test (hints to variables prone to overfitting) -------------------------
+
 for (impvar in c("importance","importance_sumnormed")) {
   #impvar = "importance" #impvar = "importance_sumnormed"
   df.tmp = df.varimp %>% select_("variable",impvar) %>% mutate(type = "test") %>% 
@@ -284,10 +287,11 @@ for (impvar in c("importance","importance_sumnormed")) {
 }
 
 
+
+
 #######################################################################################################################-
 #|||| Partial Dependance ||||----
 #######################################################################################################################-
-
 
 ## Partial depdendance for "total" fit 
 # Get "x-axis" points
@@ -330,10 +334,10 @@ ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol 
 #|||| xgboost Explainer ||||----
 #######################################################################################################################-
 
-if (TYPE %in% c("class","regr")) {
+if (TYPE %in% c("CLASS","REGR")) {
   
   # Make yhat_test a vector
-  if (TYPE == "class") yhat_explain = yhat_test[,2] else yhat_explain = yhat_test
+  if (TYPE == "CLASS") yhat_explain = yhat_test[,2] else yhat_explain = yhat_test
   
   # Derive id
   df.test$id = 1:nrow(df.test)
@@ -346,14 +350,14 @@ if (TYPE %in% c("class","regr")) {
   df.test_explain = df.test[i.explain, c("id", features)]
   
   # Get explanations
-  df.explanations = get_explanations(b_sample = b_sample, b_all = b_all, type = TYPE)
+  df.explanations = get_explanations(b_sample = b_sample, b_all = b_all, type = tolower(TYPE))
   
   
   ## Plot
   df.values = df.test_explain
   df.values[metr] = map(df.values[metr], ~ round(.,2))
-  plots = get_plot_explanations(df.plot = df.explanations, df.values = df.values, type = TYPE, topn = 10, 
-                                ylim = ylim1)
+  plots = get_plot_explanations(df.plot = df.explanations, df.values = df.values, type = tolower(TYPE), topn = 10, 
+                                ylim = ylim3)
   ggsave(paste0(plotloc,TYPE,"_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
          w = 18, h = 12)
 

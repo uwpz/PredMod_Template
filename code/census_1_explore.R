@@ -107,7 +107,7 @@ metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_")) #keep "binned" ver
 # Check for outliers and skewness
 summary(df[metr]) 
 options(warn = -1)
-plots = suppressMessages(get_plot_distr_metr(df, metr, color = twocol, missinfo = misspct, ylim = ylim))
+plots = suppressMessages(get_plot_distr_metr(df, metr, color = twocol, missinfo = misspct, ylim = c(0,0.2)))
 ggsave(paste0(plotloc,"census_distr_metr.pdf"), 
        marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 18, height = 12)
 options(warn = 0)
@@ -129,9 +129,9 @@ df[metr] = map(df[metr], ~ winsorize(., 0.01, 0.99)) #hint: one might want to pl
 # Plot 
 options(warn = -1)
 plots1 = suppressMessages(get_plot_distr_metr(df, metr, color = twocol, 
-                                             missinfo = misspct, varimpinfo = varimp_metr, ylim = ylim))
+                                             missinfo = misspct, varimpinfo = varimp_metr, ylim = c(0,0.2)))
 plots2 = suppressMessages(get_plot_distr_nomi(df, metr_binned, color = twocol, varimpinfo = NULL, inner_barplot = FALSE,
-                                              min_width = 0.2, ylim = ylim))
+                                              min_width = 0.2, ylim = c(0,0.2)))
 plots = list() ; for (i in 1:length(plots1)) {plots = c(plots, plots1[i], plots2[i])} #zip plots
 ggsave(paste0(plotloc,"census_distr_metr_final.pdf"), 
        marrangeGrob(suppressMessages(plots), ncol = 4, nrow = 2), width = 24, height = 18)
@@ -211,7 +211,7 @@ summary(df[nomi], topn_toomany + 2)
 
 # Check
 plots = suppressMessages(get_plot_distr_nomi(df, nomi, color = twocol, varimpinfo = varimp_nomi, inner_barplot = TRUE,
-                                             min_width = 0.2, ylim = ylim))
+                                             min_width = 0.2, ylim = c(0,0.2)))
 ggsave(paste0(plotloc,"census_distr_nomi.pdf"), marrangeGrob(plots, ncol = 3, nrow = 2), 
        width = 18, height = 12)
 
@@ -225,10 +225,7 @@ ggsave(paste0(plotloc,"census_distr_nomi.pdf"), marrangeGrob(plots, ncol = 3, nr
 # Remove highly/perfectly (>=99%) correlated (the ones with less levels!) 
 plot = get_plot_corr(df, input_type = "nomi", vars = nomi, cutoff = 0.9, textcol = "white")
 ggsave(paste0(plotloc,"census_corr_nomi.pdf"), plot, width = 14, height = 14)
-if (TYPE %in% c("regr","multiclass")) {
-  nomi = setdiff(nomi, c("MISS_BsmtFin_SF_2","MISS_BsmtFin_SF_1","MISS_second_Flr_SF","MISS_Misc_Val_LOG_",
-                        "MISS_Mas_Vnr_Area","MISS_Garage_Yr_Blt","MISS_Garage_Area","MISS_Total_Bsmt_SF"))
-}
+
 
 
 
@@ -268,8 +265,7 @@ setdiff(features_binned, colnames(df))
 
 
 # Save image ----------------------------------------------------------------------------------------------------------
-rm(df.orig)
-rm(plots)
+rm(df.orig, plots, plots1, plots2)
 save.image(paste0("census_1_explore.rdata"))
 
 
