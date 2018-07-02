@@ -79,7 +79,10 @@ metr = l.metadata$features$metr
 
 # Impute
 mins = l.metadata$metr$mins
-if (length(mins)) df[names(mins)] = map(names(mins), ~ df[[.]] + mins[.] + 1) #shift
+if (length(mins)) {
+  df[names(mins)] = map(names(mins), ~ ifelse(df[[.]] < mins[.], mins[.], df[[.]])) #set lower values to min
+  df[names(mins)] = map(names(mins), ~ df[[.]] - mins[.] + 1) #shift
+}
 df[metr] = map(df[metr], ~ impute(., type = "zero"))
 
 

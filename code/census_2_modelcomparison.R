@@ -17,7 +17,7 @@ plotloc = paste0(plotloc,TYPE,"/")
 # Initialize parallel processing
 closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
-cl = makeCluster(6)
+cl = makeCluster(4)
 registerDoParallel(cl) 
 # stopCluster(cl); closeAllConnections() #stop cluster
 
@@ -35,7 +35,7 @@ metric = "AUC"
 
 # Just take data from train fold (take all but n_maxpersample at most)
 summary(df[df$fold == "train", "target"])
-c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 20000)) 
+c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 1e5)) 
 summary(df.train$target); b_sample; b_all
 
 
@@ -68,10 +68,25 @@ fit = train(sparse.model.matrix(formula_binned_rightside, df.train[features_binn
 #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
             trControl = ctrl_idx_fff, metric = metric, 
             method = "glmnet", 
-            tuneGrid = expand.grid(alpha = c(0,0.2,0.4,0.6,0.8,1), lambda = 2^(seq(-3, -10, -1))))
+            tuneGrid = expand.grid(alpha = 1, lambda = 2^(seq(-3, -15, -2))))
             #preProc = c("center","scale")) #no scaling needed due to dummy coding of all variables 
 plot(fit, ylim = c(0.94,0.95))
 # -> keep alpha=1 to have a full Lasso
+
+
+
+## DeepLearning
+fit = train(formula, df.train[c("target",features)],
+            #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
+            trControl = ctrl_idx_nopar_fff, metric = metric, 
+            method = "mlpKerasDecay", 
+            tuneGrid = expand.grid(size = c(100), lambda = c(0,0.01),
+                                   batch_size = c(10), lr = c(1e-4), 
+                                   rho = 0.9, decay = 0, activation = "relu"),
+            preProc = c("center","scale"))#,
+            #verbose = 0) 
+plot(fit)
+# -> xxx
 
 
 

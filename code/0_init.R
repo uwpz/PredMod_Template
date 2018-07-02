@@ -52,6 +52,7 @@ library(xgboostExplainer)
 library(lightgbm)
 
 #library(h2o); h2o.init()
+library(keras)
 
 
 #######################################################################################################################-
@@ -131,15 +132,14 @@ winsorize = function(variable, lower = NULL, upper = NULL) {
 impute = function(variable, type = "random") {
   i.na = which(is.na(variable))
   if (length(i.na)) {
-    # Random imputation: better for interpretation
-    if (type == "random") variable[i.na] = sample(variable[-i.na], length(i.na) , replace = TRUE) 
-    # Median imputation: better in case of scoring
-    if (type == "median") variable[i.na] = median(variable[-i.na], na.rm = TRUE) 
-    # Zero imputation
-    if (type == "zero") variable[i.na] = 0 
+    variable[i.na] = switch(type, 
+        "random" = sample(variable[-i.na], length(i.na) , replace = TRUE) ,
+        "median" = median(variable[-i.na], na.rm = TRUE),
+        "zero" = 0)
   }
   variable 
 }
+
 
 
 

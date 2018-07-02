@@ -206,10 +206,8 @@ metr = c("age","fare")
 summary(df[metr])
 
 # Impute 0
-(miss = metr[map_lgl(df[metr], ~ any(is.na(.)))]) #vars with misings
-(contain_0 = miss[map_lgl(df[miss], ~ between(0, min(., na.rm = TRUE), max(., na.rm = TRUE)))]) #vars with missing and 0
-mins = map_dbl(df[contain_0], ~ min(., na.rm = TRUE)) #get minimum for these vars
-df[contain_0] = map(df[contain_0], ~ . + min(., na.rm = TRUE) + 1) #shift
+mins = map_dbl(df[metr], ~ min(., na.rm = TRUE)) #get minimum for these vars
+df[metr] = map(metr, ~ df[[.]] - mins[.] + 1) #shift
 df[miss] = map(df[miss], ~ impute(., type = "zero"))
 l.metametr = list(mins = mins)
 

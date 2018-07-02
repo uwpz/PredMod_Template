@@ -122,8 +122,8 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features
 #fit = train(formula, data = df.train[c("target",features)],
             trControl = ctrl_idx_nopar_fff, metric = metric, #no parallel for DMatrix
             method = "xgbTree", 
-            tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = c(3,6), 
-                                   eta = c(0.01,0.05), gamma = 0, colsample_bytree = c(0.3,0.7), 
+            tuneGrid = expand.grid(nrounds = seq(100,1100,200), max_depth = c(3,6),
+                                   eta = c(0.01,0.05), gamma = 0, colsample_bytree = c(0.3,0.7),
                                    min_child_weight = c(2,5,10), subsample = c(0.3,0.7)))
 plot(fit)
 
@@ -152,8 +152,20 @@ if (TYPE != "MULTICLASS") {
 
 
 
-# DeepLearning
-#TODO
+## DeepLearning
+fit = train(formula, df.train[c("target",features)],
+            #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
+            trControl = ctrl_idx_fff, metric = metric, 
+            method = "mlpKerasDecay", 
+            tuneGrid = expand.grid(size = c(10), lambda = c(0,2^-5),
+                                   batch_size = c(10), lr = c(1e-2,1e-4), 
+                                   rho = 0.9, decay = 0, activation = "relu"),
+            preProc = c("center","scale"),
+            verbose = 0) 
+plot(fit)
+# -> xxx
+
+
 
 
 
