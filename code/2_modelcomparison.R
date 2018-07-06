@@ -155,14 +155,26 @@ if (TYPE != "MULTICLASS") {
 ## DeepLearning
 fit = train(formula, df.train[c("target",features)],
             #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
-            trControl = ctrl_idx_fff, metric = metric, 
-            method = "mlpKerasDecay", 
-            tuneGrid = expand.grid(size = c(10), lambda = c(0,2^-5),
+            trControl = ctrl_idx_nopar_fff, metric = metric, 
+            method = deepLearn, 
+            tuneGrid = expand.grid(size = c("2","10_10"), lambda = c(0,2^-5),
                                    batch_size = c(10), lr = c(1e-2,1e-4), 
-                                   rho = 0.9, decay = 0, activation = "relu"),
+                                   rho = 0.9, decay = 0, activation = "relu",
+                                   epochs = 10),
             preProc = c("center","scale"),
             verbose = 0) 
+fit
 plot(fit)
+# fit = train(formula, df.train[c("target",features)],
+#             #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
+#             trControl = ctrl_idx_fff, metric = metric, 
+#             method = "mlpKerasDecay", 
+#             tuneGrid = expand.grid(size = c(2,10), lambda = c(0,2^-5),
+#                                    batch_size = c(10), lr = c(1e-2,1e-4), 
+#                                    rho = 0.9, decay = 0, activation = "relu"),
+#             preProc = c("center","scale"))
+# fit
+# plot(fit)
 # -> xxx
 
 

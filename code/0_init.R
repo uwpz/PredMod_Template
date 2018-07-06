@@ -1908,6 +1908,132 @@ lgbm$sort = function(x) {
 
 
 
+## Deep learning (from mlpKerasDecay)
+
+deepLearn = list()
+
+deepLearn$label = "Multilayer Perceptron Network with Weight Decay"
+
+deepLearn$library = "keras"
+
+deepLearn$loop = NULL
+
+deepLearn$type = c("Regression","Classification")
+
+deepLearn$parameters = 
+  read.table(header = TRUE, sep = ",", strip.white = TRUE, 
+             text = "parameter,class,label
+             size,character,Layer shape
+             lambda,numeric,L2 L2 Regularization
+             batch_size,numeric,Batch Size
+             lr,numeric,Learning Rate
+             rho,numeric,Rho
+             decay,numeric,Learning Rate Decay
+             activation,character,Activation Function
+             epochs,numeric,Epochs"
+  )
+
+deepLearn$grid = function(x, y, len = NULL, search = "grid") {
+  afuncs <- c("sigmoid", "relu", "tanh")
+  if (search == "grid") {
+    out <- expand.grid(size = "10",
+                       lambda = c(0, 10^seq(-1, -4, length = len - 1)),
+                       batch_size = floor(nrow(x)/3),
+                       lr = 2e-06,
+                       rho = 0.9,
+                       decay = 0,
+                       activation = "relu",
+                       epochs = 10)
+  }
+  else {
+    n <- nrow(x)
+    out <- data.frame(size = "10",
+                      lambda = 10^runif(len, min = -5, 1),
+                      batch_size = floor(n * runif(len, min = 0.1)),
+                      lr = runif(len),
+                      rho = runif(len),
+                      decay = 10^runif(len, min = -5, 0),
+                      activation = sample(afuncs, size = len, replace = TRUE),
+                      epochs = 10)
+  }
+  out
+}
+
+deepLearn$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
+ # browser()
+  
+  require(dplyr)
+  K <- keras::backend()
+  K$clear_session()
+  if (!is.matrix(x)) 
+    x <- as.matrix(x)
+  model <- keras::keras_model_sequential()
+  
+  size = as.numeric(str_split(param$size,"_",simplify = TRUE)[1,])
+  
+  for (i in 1:length(size)) {
+    model %>% keras::layer_dense(units = size[i], activation = as.character(param$activation), 
+                                 input_shape = ncol(x), kernel_initializer = keras::initializer_glorot_uniform(), 
+                                 kernel_regularizer = keras::regularizer_l2(param$lambda))
+  }
+  if (is.factor(y)) {
+    y <- class2ind(y)
+    model %>% keras::layer_dense(units = length(lev), activation = "softmax", 
+                                 kernel_regularizer = keras::regularizer_l2(param$lambda)) %>% 
+      keras::compile(loss = "categorical_crossentropy", 
+                     optimizer = keras::optimizer_rmsprop(lr = param$lr, rho = param$rho, decay = param$decay), 
+                     metrics = "accuracy")
+  }
+  else {
+    model %>% keras::layer_dense(units = 1, activation = "linear", 
+                                 kernel_regularizer = keras::regularizer_l2(param$lambda)) %>% 
+      compile(loss = "mean_squared_error", 
+              optimizer = keras::optimizer_rmsprop(lr = param$lr, rho = param$rho, decay = param$decay), 
+              metrics = "mean_squared_error")
+  }
+  model %>% keras::fit(x = x, y = y, batch_size = param$batch_size, epochs = param$epochs, 
+                       ...)
+  if (last) 
+    model <- keras::serialize_model(model)
+  list(object = model)
+}
+
+deepLearn$predict = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if (inherits(modelFit$object, "raw")) 
+    modelFit$object <- keras::unserialize_model(modelFit$object)
+  if (!is.matrix(newdata)) 
+    newdata <- as.matrix(newdata)
+  out <- predict(modelFit$object, newdata)
+  if (ncol(out) == 1) {
+    out <- out[, 1]
+  }
+  else {
+    out <- modelFit$obsLevels[apply(out, 1, which.max)]
+  }
+  out
+}
+
+deepLearn$prob = function(modelFit, newdata, submodels = NULL) {
+  #browser()
+  if (inherits(modelFit$object, "raw")) 
+    modelFit$object <- keras::unserialize_model(modelFit$object)
+  if (!is.matrix(newdata)) 
+    newdata <- as.matrix(newdata)
+  out <- predict(modelFit$object, newdata)
+  colnames(out) <- modelFit$obsLevels
+  as.data.frame(out)
+}
+
+deepLearn$sort = function(x) x[order(x$size, -x$lambda), ]
+
+deepLearn$check = function(pkg) {
+  testmod <- try(keras::keras_model_sequential(), silent = TRUE)
+  if (inherits(testmod, "try-error")) 
+    stop("Could not start a sequential model. ", "`tensorflow` might not be installed. ", 
+         "See `?install_tensorflow`.", call. = FALSE)
+  TRUE
+}
 
 
 
