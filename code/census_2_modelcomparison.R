@@ -9,15 +9,10 @@ load(paste0("census_1_explore.rdata"))
 # Load libraries and functions
 source("./code/0_init.R")
 
-# Adapt some parameter differnt for target types -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
-splitrule = switch(TYPE, "class" = "gini", "regr" = "variance", "multiclass" = "gini")
-type = switch(TYPE, "class" = "prob", "regr" = "raw", "multiclass" = "prob")
-plotloc = paste0(plotloc,TYPE,"/")
-
 # Initialize parallel processing
 closeAllConnections() #reset
 Sys.getenv("NUMBER_OF_PROCESSORS") 
-cl = makeCluster(4)
+cl = makeCluster(10)
 registerDoParallel(cl) 
 # stopCluster(cl); closeAllConnections() #stop cluster
 
@@ -75,21 +70,6 @@ plot(fit, ylim = c(0.94,0.95))
 
 
 
-## DeepLearning
-fit = train(formula, df.train[c("target",features)],
-            #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
-            trControl = ctrl_idx_nopar_fff, metric = metric, 
-            method = "mlpKerasDecay", 
-            tuneGrid = expand.grid(size = c(100), lambda = c(0,0.01),
-                                   batch_size = c(10), lr = c(1e-4), 
-                                   rho = 0.9, decay = 0, activation = "relu"),
-            preProc = c("center","scale"))#,
-            #verbose = 0) 
-plot(fit)
-# -> xxx
-
-
-
 ## Boosted Trees
 tmp = Sys.time()
 fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), df.train$target,
@@ -138,8 +118,22 @@ print(Sys.time() - tmp)
 
 
 
-# DeepLearning
-#TODO
+## DeepLearning
+fit = train(formula, df.train[c("target",features)],
+            #fit = train(formula_binned, data = df.train[c("target",features_binned)], 
+            trControl = ctrl_idx_nopar_fff, metric = metric, 
+            method = deepLearn, 
+            tuneGrid = expand.grid(size = c("100"), 
+                                   epochs = c(20), batch_size = c(100), lr = c(0), 
+                                   lambda = 0, dropout = c(0.5,0.2),
+                                   batch_normalization = c(TRUE,FALSE), activation = c("relu")),
+            preProc = c("center","scale"))#,
+            #verbose = 0) 
+fit
+plot(fit)
+
+
+
 
 
 

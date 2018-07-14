@@ -1912,7 +1912,7 @@ lgbm$sort = function(x) {
 
 deepLearn = list()
 
-deepLearn$label = "Multilayer Perceptron Network with Weight Decay"
+deepLearn$label = "Deep Learning"
 
 deepLearn$library = "keras"
 
@@ -1927,8 +1927,8 @@ deepLearn$parameters =
              lambda,numeric,L2 L2 Regularization
              batch_size,numeric,Batch Size
              lr,numeric,Learning Rate
-             rho,numeric,Rho
-             decay,numeric,Learning Rate Decay
+             dropout,numeric,Dropout Rate
+             batch_normalization,boolean,Batch Normalization
              activation,character,Activation Function
              epochs,numeric,Epochs"
   )
@@ -1940,8 +1940,8 @@ deepLearn$grid = function(x, y, len = NULL, search = "grid") {
                        lambda = c(0, 10^seq(-1, -4, length = len - 1)),
                        batch_size = floor(nrow(x)/3),
                        lr = 2e-06,
-                       rho = 0.9,
-                       decay = 0,
+                       dropout = 0,
+                       batch_normalization = FALSE,
                        activation = "relu",
                        epochs = 10)
   }
@@ -1951,8 +1951,8 @@ deepLearn$grid = function(x, y, len = NULL, search = "grid") {
                       lambda = 10^runif(len, min = -5, 1),
                       batch_size = floor(n * runif(len, min = 0.1)),
                       lr = runif(len),
-                      rho = runif(len),
-                      decay = 10^runif(len, min = -5, 0),
+                      dropout = 0,
+                      batch_normalization = FALSE,
                       activation = sample(afuncs, size = len, replace = TRUE),
                       epochs = 10)
   }
@@ -1961,6 +1961,7 @@ deepLearn$grid = function(x, y, len = NULL, search = "grid") {
 
 deepLearn$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
  # browser()
+  print(param)
   
   require(dplyr)
   K <- keras::backend()
@@ -1975,20 +1976,22 @@ deepLearn$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
     model %>% keras::layer_dense(units = size[i], activation = as.character(param$activation), 
                                  input_shape = ncol(x), kernel_initializer = keras::initializer_glorot_uniform(), 
                                  kernel_regularizer = keras::regularizer_l2(param$lambda))
+    if(param$batch_normalization) model %>% keras::layer_batch_normalization()
+    if(param$dropout > 0) model %>% keras::layer_dropout(param$dropout)
   }
   if (is.factor(y)) {
     y <- class2ind(y)
     model %>% keras::layer_dense(units = length(lev), activation = "softmax", 
                                  kernel_regularizer = keras::regularizer_l2(param$lambda)) %>% 
       keras::compile(loss = "categorical_crossentropy", 
-                     optimizer = keras::optimizer_rmsprop(lr = param$lr, rho = param$rho, decay = param$decay), 
+                     optimizer = keras::optimizer_rmsprop(lr = param$lr), 
                      metrics = "accuracy")
   }
   else {
     model %>% keras::layer_dense(units = 1, activation = "linear", 
                                  kernel_regularizer = keras::regularizer_l2(param$lambda)) %>% 
       compile(loss = "mean_squared_error", 
-              optimizer = keras::optimizer_rmsprop(lr = param$lr, rho = param$rho, decay = param$decay), 
+              optimizer = keras::optimizer_rmsprop(lr = param$lr), 
               metrics = "mean_squared_error")
   }
   model %>% keras::fit(x = x, y = y, batch_size = param$batch_size, epochs = param$epochs, 
