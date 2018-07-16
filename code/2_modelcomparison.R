@@ -1,11 +1,10 @@
 
-skip = function() {
-  # Set target type -> ADAPT IF-ELSE PARTS AT APPROPRIATE LOCATION FOR A USE-CASE
-  rm(list = ls())
-  TYPE = "CLASS"
-  TYPE = "REGR"
-  TYPE = "MULTICLASS"
-}
+# Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
+rm(list = ls())
+TYPE = "CLASS"
+#TYPE = "REGR"
+#TYPE = "MULTICLASS"
+
 
 
 #######################################################################################################################-

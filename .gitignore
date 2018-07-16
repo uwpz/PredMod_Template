@@ -7,3 +7,4 @@ output/*
 *.rdata
 *.pkl
 lightgbm.model
+*.lnk
