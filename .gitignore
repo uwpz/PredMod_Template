@@ -8,3 +8,4 @@ output/*
 *.pkl
 lightgbm.model
 *.lnk
+.ipynb_checkpoints/*

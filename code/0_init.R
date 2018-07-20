@@ -1268,6 +1268,36 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
 
 
 ## Get explanations data
+
+# Overwrite slow explainPredictions
+explainPredictions = function (xgb.model, explainer, data) 
+{
+  nodes = predict(xgb.model, data, predleaf = TRUE)
+  colnames = names(explainer)[1:(ncol(explainer) - 2)]
+  # preds_breakdown = data.table(matrix(0, nrow = nrow(nodes), 
+  #                                     ncol = length(colnames)))
+  # setnames(preds_breakdown, colnames)
+  # num_trees = ncol(nodes)
+  # cat("\n\nExtracting the breakdown of each prediction...\n")
+  # pb <- txtProgressBar(style = 3)
+  # for (x in 1:num_trees) {
+  #   nodes_for_tree = nodes[, x]
+  #   tree_breakdown = explainer[tree == x - 1]
+  #   preds_breakdown_for_tree = tree_breakdown[match(nodes_for_tree, 
+  #                                                   tree_breakdown$leaf), ]
+  #   preds_breakdown = preds_breakdown + preds_breakdown_for_tree[, 
+  #                                                                colnames, with = FALSE]
+  #   setTxtProgressBar(pb, x/num_trees)
+  # }
+  # cat("\n\nDONE!\n")
+  preds_breakdown = gather(bind_cols(id = 1:nrow(nodes), as.data.frame(nodes)), 
+                           key = tree, value = leaf, -id) %>% #transpose
+    mutate(tree = as.numeric(substring(tree,2)) - 1) %>% #derive tree number
+    left_join(explainer) %>% #add explainer data
+    select(-tree, -leaf) %>% group_by(id) %>% summarise_all(sum) %>% select(-id) #summarise
+  return(preds_breakdown)
+}
+
 get_explanations = function(fit.for_explain = fit,
                             b_sample = NULL, b_all = NULL,
                             df.train_explain = df.train[features], 
@@ -1329,7 +1359,7 @@ get_explanations = function(fit.for_explain = fit,
 ## Get plot list for xgboost explainer
 get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_explain, 
                                  id_name = "id", type = "class", ylim = c(0.01, 0.99), 
-                                 fillcol = alpha(c("darkgreen","red"), 0.5),
+                                 fillcol = alpha(c("red","darkgreen"), 0.5),
                                  threshold = NULL, topn = NULL) {
   
   # Prepare
