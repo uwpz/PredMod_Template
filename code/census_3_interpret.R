@@ -300,7 +300,9 @@ i.explain = sample(unique(c(i.top, i.bottom, i.random)))
 df.test_explain = df.test[i.explain, c("id", features)]
 
 # Get explanations
-df.explanations = get_explanations(type = "class")
+tmp = Sys.time()
+df.explanations = get_explanations(type = "class", b_sample = b_sample, b_all = b_all)
+Sys.time() - tmp
 
 
 ## Plot

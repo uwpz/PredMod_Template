@@ -1,8 +1,8 @@
 
 # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 rm(list = ls())
-TYPE = "CLASS"
-#TYPE = "REGR"
+#TYPE = "CLASS"
+TYPE = "REGR"
 #TYPE = "MULTICLASS"
 
 #######################################################################################################################-
@@ -47,7 +47,7 @@ df = df.orig
 
 
 
-# Feature engineering -------------------------------------------------------------------------------------------------------------
+# Feature engineering -------------------------------------------------------------------------------------------------
 
 if (TYPE == "CLASS") { 
   df$deck = as.factor(str_sub(df$cabin, 1, 1))
@@ -61,7 +61,7 @@ if (TYPE %in% c("REGR","MULTICLASS")) {
 
 
 
-# Define target and train/test-fold ----------------------------------------------------------------------------------
+# Define target and train/test-fold and define id ------------------------------------------------------------------------
 
 # Target
 if (TYPE == "CLASS") { 
@@ -69,7 +69,7 @@ if (TYPE == "CLASS") {
                   target_num = ifelse(target == "N", 0 ,1))
   summary(df$target_num)
 }
-if (TYPE == "REGR") df$target = df$SalePrice
+if (TYPE == "REGR") df$target = df$SalePrice / 1000
 if (TYPE == "MULTICLASS") {
   df$target = as.factor(paste0("Cat_", 
                   as.numeric(cut(df.orig$SalePrice, c(-Inf,quantile(df.orig$SalePrice, c(.333,.666)),Inf)))))
@@ -81,6 +81,9 @@ df$fold = factor("train", levels = c("train", "test"))
 set.seed(123)
 df[sample(1:nrow(df), floor(0.3*nrow(df))),"fold"] = "test" #70/30 split
 summary(df$fold)
+
+# Define the id
+df$id = 1:nrow(df)
 
 
 
@@ -327,11 +330,11 @@ ggsave(paste0(plotloc,TYPE,"_distr_nomi_folddependency.pdf"), marrangeGrob(plots
 # Define final features ----------------------------------------------------------------------------------------
 
 features = c(metr, nomi)
-formula = as.formula(paste("target", "~", paste(features, collapse = " + ")))
-formula_rightside = as.formula(paste("~", paste(features, collapse = " + ")))
+formula = as.formula(paste("target", "~ -1 + ", paste(features, collapse = " + ")))
+formula_rightside = as.formula(paste("~ -1 + ", paste(features, collapse = " + ")))
 features_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
-formula_binned = as.formula(paste("target", "~", paste(features_binned, collapse = " + ")))
-formula_binned_rightside = as.formula(paste("~", paste(features_binned, collapse = " + ")))
+formula_binned = as.formula(paste("target", "~ ", paste(features_binned, collapse = " + ")))
+formula_binned_rightside = as.formula(paste("~ ", paste(features_binned, collapse = " + ")))
 
 # Check
 summary(df[features])

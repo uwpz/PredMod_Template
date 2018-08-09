@@ -1298,7 +1298,7 @@ explainPredictions = function (xgb.model, explainer, data)
   return(preds_breakdown)
 }
 
-get_explanations = function(fit.for_explain = fit,
+get_explanations_old = function(fit.for_explain = fit,
                             b_sample = NULL, b_all = NULL,
                             df.train_explain = df.train[features], 
                             df.test_explain = df.test[i.explain, c("id", features)],
@@ -1308,26 +1308,26 @@ get_explanations = function(fit.for_explain = fit,
   #browser()
   
   # Get model matrix and DMatrix for train and test (sample) data
-  m.model_train = sparse.model.matrix(formula_rightside, data = df.train_explain[feature_names])
-  dm.train = xgb.DMatrix(m.model_train) 
-  m.test_explain = sparse.model.matrix(formula_rightside, data = df.test_explain[feature_names])
-  dm.test_explain = xgb.DMatrix(m.test_explain)
+  m.train = sparse.model.matrix(formula, data = df.train_explain[feature_names])
+  DM.train = xgb.DMatrix(m.train) 
+  m.test_explain = sparse.model.matrix(formula, data = df.test_explain[feature_names])
+  DM.test_explain = xgb.DMatrix(m.test_explain)
   
   
   ## Create explainer data table from train data
   if (type == "class") {
-    df.explainer = buildExplainer(fit.for_explain$finalModel, dm.train, type = "binary")
+    df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "binary")
     
     # Switch coefficients (as explainer takes "N" as target = 1)
     cols = setdiff(colnames(df.explainer), c("leaf","tree"))
     df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
   } else {
-    df.explainer = buildExplainer(fit.for_explain$finalModel, dm.train, type = "regression")
+    df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "regression")
   }
   
-  
+  browser()
   ## Get explanations for predictions of test data
-  df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, dm.test_explain)
+  df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, DM.test_explain)
   if (type == "class") {
     tmp = inv.logit(df.predictions$intercept)
     df.predictions$intercept = logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
@@ -1335,8 +1335,8 @@ get_explanations = function(fit.for_explain = fit,
   
   # Aggregate predictions for all nominal variables
   df.predictions = as.data.frame(df.predictions)
-  df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train[1,feature_names]), "assign")],
-                      levname = colnames(m.model_train)[-1])
+  df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train_explain[1,feature_names]), "assign")],
+                      levname = setdiff(colnames(m.train),"(Intercept)"))
   for (i in 1:length(nomi)) {
     #i=1
     varname = nomi[i]
@@ -1346,58 +1346,291 @@ get_explanations = function(fit.for_explain = fit,
   }
   
   # Check
-  if (type == "class") left = inv.logit(rowSums(df.predictions[,-1])) else left = rowSums(df.predictions[,-1])
+  if (type == "class") left = inv.logit(rowSums(df.predictions)) else left = rowSums(df.predictions)
   if (all.equal(left, preds, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
     print("Predictions and explanations DO NOT map!!!")
   
   df.predictions$id = df.test_explain$id 
   df.predictions
 }
+# 
+# get_explanations = function(fit.for_explain = fit,
+#                             b_sample = NULL, b_all = NULL,
+#                             df.train_explain = df.train[features], 
+#                             df.test_explain = df.test[i.explain, c("id", features)],
+#                             preds = yhat_explain[i.explain],
+#                             id_name = "id", feature_names = features, formula = formula_rightside,
+#                             type = "class") {
+#   browser()
+#   
+#   # Get model matrix and DMatrix for train and test (sample) data
+#   m.train = sparse.model.matrix(formula, data = df.train_explain[feature_names])
+#   DM.train = xgb.DMatrix(m.train) 
+#   m.test_explain = sparse.model.matrix(formula, data = df.test_explain[feature_names])
+#   DM.test_explain = xgb.DMatrix(m.test_explain)
+#   
+#   
+#   
+#   ## Create explainer data table from train data
+#   
+#   # Get trees and add lp (linear predictor) info
+#   df.trees = xgb.model.dt.tree(attr(m.train, "Dimnames")[[2]], fit.for_explain$finalModel) %>% 
+#     as.data.frame()%>% 
+#     #left_join(df.nodes_train, by = c("Tree" = "tree", "Node" = "leaf")) %>% 
+#     #select(-Cover) %>% mutate(Cover=n) %>% 
+#     mutate(lp_per_cover = ifelse(Feature == "Leaf", Quality, NA),
+#            lp = lp_per_cover * Cover)
+#   
+#   # Convert Yes/No branches to real parent-child
+#   df.parent_child = bind_rows(df.trees %>% select(-No) %>% rename("ID_child" = "Yes") %>% filter(Feature != "Leaf"),
+#                               df.trees %>% select(-Yes) %>% rename("ID_child" = "No")) %>% 
+#     arrange(Tree, Node, ID)
+#   
+#   # Sceleton for appending
+#   df.explain = c()
+#   
+#   # Set df.leaves for first iteration
+#   df.leaves = df.parent_child %>% filter(Feature == "Leaf") %>% 
+#     mutate(count_leaf = 1) %>% 
+#     select(Tree, Node, ID_child = ID, Cover_leaf = Cover, lp_leaf = lp, lp_per_cover_child = lp_per_cover, count_leaf)
+#   
+#   ## Loop from here ...
+#   while(TRUE) {
+#     df.split = df.leaves %>% 
+#       left_join(df.parent_child %>% select(ID, ID_child, Feature)) %>% #add next level to all leaves
+#       group_by(Tree, ID) %>% mutate(Cover_parent = sum(Cover_leaf), lp_parent = sum(lp_leaf), 
+#                                     count = n()) %>% ungroup() %>% 
+#       mutate(lp_per_cover_parent = lp_parent/Cover_parent,
+#              weight = lp_per_cover_child - lp_per_cover_parent) %>% 
+#       mutate(ID = ifelse(count == count_leaf, ID_child, ID)) %>% 
+#       mutate(count_leaf = count) %>% 
+#       filter(!is.na(ID))
+#     
+#     df.explain = bind_rows(df.explain, 
+#                            df.split %>% select(Tree, Node, Feature, weight),
+#                            df.split %>% filter(str_split(ID, "-", simplify = TRUE)[,2] == 0) %>% 
+#                              mutate(Feature = "intercept", weight = lp_per_cover_parent) %>% 
+#                              select(Tree, Node, Feature, weight))
+#     
+#     df.leaves = df.split %>% 
+#       select(Tree, Node, ID_child = ID, Cover_leaf, lp_leaf, lp_per_cover_child = lp_per_cover_parent, count_leaf) %>% 
+#       filter(str_split(ID_child, "-", simplify = TRUE)[,2] != 0)
+#     
+#     if(nrow(df.leaves) == 0) break
+#   }
+#   
+#   # Aggregate
+#   df.explain = df.explain %>% group_by(Tree, Node, Feature) %>% summarise(weight = sum(weight))
+#   
+#   
+#   
+#   ## Get explanations for predictions of test data
+#   df.predictions = as.data.frame(predict(fit.for_explain$finalModel, DM.test_explain, predleaf = TRUE)) %>% 
+#     mutate(id = i.explain) %>% 
+#     gather(key = tree, value = leaf, -id) %>% 
+#     mutate(tree = as.numeric(substring(tree,2)) - 1) %>% 
+#     left_join(df.explain, by = c("tree" = "Tree", "leaf" = "Node")) %>% 
+#     group_by(id, Feature) %>% 
+#     summarise(weight = sum(weight))
+#   
+#   if (type %in% c("class", "multiclass")) {
+#     # Switch coefficients (as explainer takes "N" as target = 1)
+#     df.predictions$weight = -df.predictions$weight
+#     
+#     # Rescale intercept due to undersampling
+#     i.intercept = which(df.predictions$Feature == "intercept")
+#     tmp = inv.logit(df.predictions$weight[i.intercept])
+#     intercept_new =  logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
+#     df.predictions[i.intercept, "weight"] = intercept_new
+#   }
+#   
+#   # Aggregate predictions for all nominal variables
+#   df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train_explain[1,feature_names]), "assign")],
+#                       levname = setdiff(colnames(m.train),"(Intercept)"), stringsAsFactors = FALSE)
+#   df.predictions = df.predictions %>% left_join(df.map, by = c("Feature" = "levname"))
+# 
+#   
+#   # Check
+#   df.check = df.predictions %>% group_by(id) %>% summarise(weight = sum(weight)) %>% mutate(yhat = yhat_explain[.$id])
+#   if (type %in% c("class", "multiclass")) df.check$weight = inv.logit(df.check$weight)
+#   if (all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
+#     print("Predictions and explanations DO NOT map!!!")
+#   
+#   df.predictions
+# }
 
+
+## Create explainer data frame from train data
+get_explainer = function(fit.for_explain = fit, 
+                         m.train_for_explain = m.train,
+                         feature_names = features) {
+  #browser()
+  
+  # Create mapping table for Feature to variable
+  df.map = data.frame(Feature = as.character(c(1:dim(m.train_for_explain)[2]) -1),
+                      levname = colnames(m.train_for_explain),
+                      variable = feature_names[attr(m.train_for_explain, "assign")],
+                      stringsAsFactors = FALSE) %>% 
+    bind_rows(data.frame(Feature = "intercept", levname = "intercept", variable = "intercept", stringsAsFactors = FALSE ))
+  
+  # Get trees and add lp (linear predictor) info
+  df.trees = xgb.model.dt.tree(attr(m.train, "Dimnames")[[2]], fit.for_explain$finalModel) %>% 
+    as.data.frame()%>% 
+    mutate(lp_per_cover = ifelse(Feature == "Leaf", Quality, NA),
+           lp = lp_per_cover * Cover)
+  
+  # Convert Yes/No branches to real parent-child
+  df.parent_child = bind_rows(df.trees %>% select(-No) %>% rename("ID_child" = "Yes") %>% filter(Feature != "Leaf"),
+                              df.trees %>% select(-Yes) %>% rename("ID_child" = "No")) %>% 
+    arrange(Tree, Node, ID)
+  
+  # Sceleton for appending
+  df.explainer = c()
+  
+  # Set df.leaves for first iteration
+  df.leaves = df.parent_child %>% filter(Feature == "Leaf") %>% 
+    mutate(count_leaf = 1) %>% 
+    select(Tree, Node, ID_child = ID, Cover_leaf = Cover, lp_leaf = lp, lp_per_cover_child = lp_per_cover, count_leaf)
+  
+  ## Loop from here ...
+  while(TRUE) {
+    # Get split information
+    df.split = df.leaves %>% 
+      left_join(df.parent_child %>% select(ID, ID_child, Feature)) %>% #add next level to all leaves
+      group_by(Tree, ID) %>% mutate(Cover_parent = sum(Cover_leaf), 
+                                    lp_parent = sum(lp_leaf), 
+                                    count = n()) %>% ungroup() %>% #aggregate leaves cover and lp to parent
+      mutate(lp_per_cover_parent = lp_parent/Cover_parent, 
+             weight = lp_per_cover_child - lp_per_cover_parent) %>% #calc diff in lp_per_cover
+      mutate(ID = ifelse(count == count_leaf, ID_child, ID)) %>% #reset ID in case of having no split
+      mutate(count_leaf = count) #%>% #add leaf count information (needed in next iteration for above chech)
+    #filter(!is.na(ID)) # infor
+    
+    # Append split information and intercepts
+    df.explainer = bind_rows(df.explainer, 
+                             df.split %>% select(Tree, Node, Feature, weight), #add split data
+                             df.split %>% filter(str_split(ID, "-", simplify = TRUE)[,2] == 0) %>% #add intercept
+                               mutate(Feature = "intercept", weight = lp_per_cover_parent) %>% 
+                               select(Tree, Node, Feature, weight))
+    # Calc df.leaves for next iteration
+    df.leaves = df.split %>% 
+      select(Tree, Node, ID_child = ID, Cover_leaf, lp_leaf, lp_per_cover_child = lp_per_cover_parent, count_leaf) %>% 
+      filter(str_split(ID_child, "-", simplify = TRUE)[,2] != 0)
+    
+    # Exit criteria
+    if(nrow(df.leaves) == 0) break
+  }
+  
+  # Aggregate over Feature names and return
+  df.explainer %>% 
+    left_join(df.map) %>% #add original variable name
+    group_by(Tree, Node, variable) %>% summarise(weight = sum(weight))
+}  
+
+
+## Get explanations for some predictions from explainer data
+get_explanations = function(fit.for_explain = fit,
+                            feature_names = features,
+                            df.test_explain,
+                            id_name = "id",
+                            yhat_explain,
+                            df.explainer,
+                            b_sample, b_all,
+                            rounding = 2) {
+  
+  #browser()
+  
+  ## Get explanations for predictions of test data
+  m.test_explain = model.matrix(as.formula(paste("~ -1 + ", paste(feature_names, collapse = " + "))),
+                                df.test_explain[feature_names], sparse = TRUE)
+  df.weights = predict(fit.for_explain$finalModel, xgb.DMatrix(m.test_explain), predleaf = TRUE) %>%
+    as.data.frame() %>% 
+    mutate_(.dots = setNames(list("1:nrow(.)", "df.test_explain[[id_name]]"), c("row_number",id_name))) %>% 
+    gather_(key = "tree", value = "leaf", gather_cols = setdiff(colnames(.), c("row_number", id_name))) %>% 
+    mutate(tree = as.numeric(substring(tree,2)) - 1) %>%
+    left_join(df.explainer, by = c("tree" = "Tree", "leaf" = "Node")) %>%
+    group_by_("row_number", id_name, "variable") %>%
+    summarise(weight = sum(weight))
+  
+  if (fit.for_explain$modelType == "Classification") {
+    # Switch coefficients (as explainer takes "N" as target = 1)
+    df.weights$weight = -df.weights$weight
+    
+    # Rescale intercept due to undersampling
+    i.intercept = which(df.weights$variable == "intercept")
+    tmp = inv.logit(df.weights$weight[i.intercept])
+    intercept_new =  logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
+    df.weights[i.intercept, "weight"] = intercept_new
+  }
+  
+  # Check
+  df.check = df.weights %>% group_by(row_number) %>% summarise(weight = sum(weight)) %>% 
+    mutate(yhat = yhat_explain)
+  if (fit.for_explain$modelType == "Classification") df.check$weight = inv.logit(df.check$weight)
+  if (all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else
+    print("Predictions and explanations DO NOT map!!!")
+  
+  # Add values
+  df.values = df.test_explain[c(id_name,feature_names)]
+  df.values[feature_names] = map(df.values[feature_names], ~ {
+    if (is.numeric(.x)) as.character(round(.x, rounding)) else as.character(.x)
+  })
+  df.values = df.values %>% gather_(key = "variable", value = "value", setdiff(colnames(.), id_name))
+  df.weights = df.weights %>% left_join(df.values)
+  
+  # Return
+  df.weights
+}
 
 
 ## Get plot list for xgboost explainer
-get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_explain, 
+get_plot_explanations = function(df.plot = df.explanations,  
                                  id_name = "id", type = "class", ylim = c(0.01, 0.99), 
                                  fillcol = alpha(c("red","darkgreen"), 0.5),
-                                 threshold = NULL, topn = NULL) {
+                                 threshold = NULL, topn = NULL,
+                                 add_to_title = NULL) {
+  
+  #browser()
   
   # Prepare
-  df.tmp1 = df.plot %>% 
-    gather_(key_col = "variable", value_col = "beta", gather_cols = setdiff(colnames(df.plot), id_name)) %>%  #rotate
-    mutate(flag_intercept = ifelse(variable == "intercept", 1, 0))
+  df.plot = df.plot %>% mutate(flag_intercept = ifelse(variable == "intercept", 1, 0))
+  
   # Threshold summary of small effects
   if (!is.null(threshold)) {
-    df.tmp2 = df.tmp1 %>% 
-      mutate(variable = ifelse(variable != "intercept" & abs(beta) < threshold, "..... the rest", variable))
+    df.tmp = df.plot %>% 
+      mutate(variable = ifelse(variable != "intercept" & abs(weight) < threshold, "..... the rest", variable))
   }
+  
   # Topn summary of small effects
   if (!is.null(topn)) {
-    df.tmp2 = df.tmp1 %>% group_by_(id_name) %>% arrange_(id_name, "desc(flag_intercept)", "desc(abs(beta))") %>% 
+    df.tmp = df.plot %>% group_by_(id_name) %>% arrange_(id_name, "desc(flag_intercept)", "desc(abs(weight))") %>% 
       mutate(n = row_number()) %>% 
       mutate(variable = ifelse(n > topn + 1, "..... the rest", variable)) %>% 
       ungroup()
   }
-  df.ggplot = df.tmp2 %>%  
-    group_by_(id_name, "flag_intercept", "variable") %>% summarise(beta = sum(beta)) %>%  #summarise small effect
+  df.ggplot = df.tmp %>%  
+    group_by_(id_name, "flag_intercept", "variable") %>% summarise(weight = sum(weight)) %>%  #summarise small effect
     mutate(flag_therest = ifelse(variable == "..... the rest", 1, 0)) %>% 
-    arrange_(id_name, "desc(flag_intercept)","flag_therest","desc(abs(beta))") %>%  #sort descending inside id
-    left_join(gather_(df.values, key_col = "variable", value_col = "value", 
-                      gather_cols = setdiff(colnames(df.values), id_name))) %>%  #add values
+    arrange_(id_name, "desc(flag_intercept)","flag_therest","desc(abs(weight))") %>%  #sort descending inside id
+    left_join(df.plot %>% select_("row_number", id_name, "variable", "value")) %>%  #add values
     mutate(variableandvalue = ifelse(variable %in% c("intercept","..... the rest"), 
-                             variable, paste0(variable," = ",value)))
-
-  plots = map(df.plot[[id_name]], ~ {
-    #.x = df.plot[1,"id"]
-    print(.x)
+                                     variable, paste0(variable," = ",value)))
+  
+  # Plot
+  ids = unique(df.plot[[id_name]])
+  plots = map(1:length(ids), ~ {
+    #.x = 1
+    print(ids[.x])
     
-    df.waterfall = df.ggplot %>% filter_(paste0(id_name, "==", .x))
-    p = waterfall(values = df.waterfall$beta, rect_text_labels = round(df.waterfall$beta, 2), 
-                  labels = df.waterfall$variableandvalue, total_rect_text = round(sum(df.waterfall$beta), 2),
+    df.waterfall = df.ggplot[df.ggplot[[id_name]] == ids[.x],] 
+    title = paste0(id_name, " = ", ids[.x])
+    if (!is.null(add_to_title)) title = paste0(title, add_to_title[.x])
+    p = waterfall(values = df.waterfall$weight, rect_text_labels = round(df.waterfall$weight, 2), 
+                  labels = df.waterfall$variableandvalue, total_rect_text = round(sum(df.waterfall$weight), 2),
                   fill_by_sign = FALSE,
-                  fill_colours = ifelse(df.waterfall$beta >= 0, fillcol[1], fillcol[2]),
+                  fill_colours = ifelse(df.waterfall$weight < 0, fillcol[1], fillcol[2]),
                   calc_total = TRUE, total_axis_text = "Prediction") + 
-      labs(title = paste0(id_name, " = ", .x)) +
+      labs(title = title) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),
             plot.title = element_text(hjust = 0.5)) 
     if (type == "class") {
@@ -1410,6 +1643,8 @@ get_plot_explanations = function(df.plot = df.predictions, df.values = df.test_e
   })
   plots  
 }
+
+
 
 
 

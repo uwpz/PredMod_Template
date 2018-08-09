@@ -1,8 +1,8 @@
 
 # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 rm(list = ls())
-TYPE = "CLASS"
-#TYPE = "REGR"
+#TYPE = "CLASS"
+TYPE = "REGR"
 #TYPE = "MULTICLASS"
 
 
@@ -23,8 +23,8 @@ type = switch(TYPE, "CLASS" = "prob", "REGR" = "raw", "MULTICLASS" = "prob") #do
 color = switch(TYPE, "CLASS" = twocol, "REGR" = twocol, "MULTICLASS" = threecol) #probably need to change multiclass opt
 ylim1 = switch(TYPE, "CLASS" = c(0,1), "REGR"  = c(-5e4,5e4), "MULTICLASS" = c(0,1))
 ylim2 = switch(TYPE, "CLASS" = c(0.2,0.7), "REGR"  = c(1.5e5,2.5e5), "MULTICLASS" = c(0,1)) #need to adapt
-ylim3 = switch(TYPE, "CLASS" = c(0,1), "REGR"  = c(0,5e5), "MULTICLASS" = c(0,1))
-topn = switch(TYPE, "CLASS" = 10, "REGR" = 20, "MULTICLASS" = 20) #remove here and set hard below
+ylim3 = switch(TYPE, "CLASS" = c(0,1), "REGR"  = c(0,6e5), "MULTICLASS" = c(0,1))
+topn = switch(TYPE, "CLASS" = 8, "REGR" = 20, "MULTICLASS" = 20) #remove here and set hard below
 b_all = b_sample = NULL #do not change this one (as it is default in regression case)
 
 
@@ -59,7 +59,7 @@ if (TYPE %in% c("REGR","MULTICLASS")) {
 if (TYPE %in% c("CLASS","MULTICLASS")) {
   # Just take data from train fold (take all but n_maxpersample at most)
   summary(df[df$fold == "train", "target"])
-  c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 500)) 
+  c(df.train, b_sample, b_all) %<-%  (df %>% filter(fold == "train") %>% undersample_n(n_maxpersample = 4e10)) 
   summary(df.train$target); b_sample; b_all
   
   # Set metric for peformance comparison
@@ -87,7 +87,8 @@ df.test = df %>% filter(fold == "test")
 
 # Fit
 tmp = Sys.time()
-fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features])), df.train$target,
+m.train = model.matrix(formula_rightside, data = df.train[features], sparse = TRUE)
+fit = train( xgb.DMatrix(m.train), df.train$target,
 #fit = train(formula, data = df.train[c("target",features)],
             trControl = trainControl(method = "none", returnData = FALSE, allowParallel = FALSE), 
             method = "xgbTree", 
@@ -95,8 +96,8 @@ fit = train(xgb.DMatrix(sparse.model.matrix(formula_rightside, df.train[features
 Sys.time() - tmp
 
 # Predict
-yhat_test_unscaled = predict(fit, xgb.DMatrix(sparse.model.matrix(formula_rightside, df.test[features])),
-                             type = type)
+m.test = model.matrix(formula_rightside, df.test[features], sparse = TRUE)
+yhat_test_unscaled = predict(fit, xgb.DMatrix(m.test), type = type)
 summary(yhat_test_unscaled)
 # # Scoring in chunks in parallel in case of high memory consumption of xgboost
 # l.split = split(df.test[features], (1:nrow(df.test)) %/% 50000)
@@ -106,6 +107,7 @@ summary(yhat_test_unscaled)
 
 # Rescale 
 yhat_test = scale_pred(yhat_test_unscaled, b_sample, b_all)
+df.test$yhat = yhat_test[,2]
 y_test = df.test$target
 
 # Plot performance
@@ -150,6 +152,37 @@ if (TYPE == "REGR") {
          width = 18, height = 12)
 }
 
+
+
+
+#---- Explain fails ----------------------------------------------------------------------------------
+
+if (TYPE %in% c("CLASS","REGR")) {
+  
+  ## Get explainer data
+  df.explainer = get_explainer()
+  
+  ## Get n_worst most false predicted ids
+  n_worst = 30
+  df.test_explain = df.test %>% arrange(desc(residual)) %>% top_n(n_worst, residual)
+  yhat_explain = scale_pred(predict(fit, model.matrix(formula_rightside, df.test_explain[features], sparse = TRUE), 
+                                    type = type),
+                            b_sample, b_all)
+  if (TYPE == "CLASS") yhat_explain = yhat_explain[,2]
+  
+  ## Get explanations
+  df.explanations = get_explanations(fit.for_explain = fit, feature_names = features,
+                                     df.test_explain = df.test_explain, id_name = "id", yhat_explain = yhat_explain,
+                                     df.explainer,
+                                     b_sample, b_all)
+  
+  ## Plot
+  plots = get_plot_explanations(df.plot = df.explanations, type = tolower(TYPE), topn = topn, ylim = ylim3, 
+                                add_to_title = paste0(" (y = ",df.test_explain$target,", ",
+                                                      "y_hat = ", round(yhat_explain, 2), ")"))
+  ggsave(paste0(plotloc,TYPE,"_fails.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
+         w = 18, h = 12)
+}
 
 
 
@@ -338,27 +371,25 @@ ggsave(paste0(plotloc,TYPE,"_partial_dependence.pdf"), marrangeGrob(plots, ncol 
 if (TYPE %in% c("CLASS","REGR")) {
   
   # Make yhat_test a vector
-  if (TYPE == "CLASS") yhat_explain = yhat_test[,2] else yhat_explain = yhat_test
+  if (TYPE == "CLASS") yhat_tmp = yhat_test[,2] else yhat_tmp = yhat_test
   
-  # Derive id
-  df.test$id = 1:nrow(df.test)
-  
-  # Subset test data (explanations are only calcualted for this subset)
-  i.top = order(yhat_explain, decreasing = TRUE)[1:20]
-  i.bottom = order(yhat_explain)[1:20]
-  i.random = sample(1:length(yhat_explain), 20)
+  # Subset test data (explanations are only calculated for this subset)
+  i.top = order(yhat_tmp, decreasing = TRUE)[1:20]
+  i.bottom = order(yhat_tmp)[1:20]
+  i.random = sample(1:length(yhat_tmp), 20)
   i.explain = sample(unique(c(i.top, i.bottom, i.random)))
   df.test_explain = df.test[i.explain, c("id", features)]
+  yhat_explain = yhat_tmp[i.explain]
   
   # Get explanations
-  df.explanations = get_explanations(b_sample = b_sample, b_all = b_all, type = tolower(TYPE))
-  
+  df.explanations = get_explanations(fit.for_explain = fit, feature_names = features,
+                                     df.test_explain = df.test_explain, id_name = "id", yhat_explain = yhat_explain,
+                                     df.explainer,
+                                     b_sample, b_all)
   
   ## Plot
-  df.values = df.test_explain
-  df.values[metr] = map(df.values[metr], ~ round(.,2))
-  plots = get_plot_explanations(df.plot = df.explanations, df.values = df.values, type = tolower(TYPE), topn = 10, 
-                                ylim = ylim3)
+  plots = get_plot_explanations(df.plot = df.explanations, type = tolower(TYPE), topn = topn, ylim = ylim3, 
+                                add_to_title = paste0(" (","y_hat"," = ", round(yhat_explain, 2), ")"))
   ggsave(paste0(plotloc,TYPE,"_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
          w = 18, h = 12)
 
