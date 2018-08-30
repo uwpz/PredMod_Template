@@ -1,8 +1,8 @@
 
 # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 rm(list = ls())
-#TYPE = "CLASS"
-TYPE = "REGR"
+TYPE = "CLASS"
+#TYPE = "REGR"
 #TYPE = "MULTICLASS"
 
 #######################################################################################################################-
@@ -331,10 +331,8 @@ ggsave(paste0(plotloc,TYPE,"_distr_nomi_folddependency.pdf"), marrangeGrob(plots
 
 features = c(metr, nomi)
 formula = as.formula(paste("target", "~ -1 + ", paste(features, collapse = " + ")))
-formula_rightside = as.formula(paste("~ -1 + ", paste(features, collapse = " + ")))
 features_binned = c(metr_binned, setdiff(nomi, paste0("MISS_",miss))) #do not need indicators if binned variables
 formula_binned = as.formula(paste("target", "~ ", paste(features_binned, collapse = " + ")))
-formula_binned_rightside = as.formula(paste("~ ", paste(features_binned, collapse = " + ")))
 
 # Check
 summary(df[features])

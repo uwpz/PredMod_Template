@@ -1,7 +1,6 @@
 
 #TODO: 
 # interactions univariate
-# explainer for multiclass
 
 
 #######################################################################################################################-
@@ -179,25 +178,23 @@ mysummary = function(data, lev = NULL, model = NULL)
     lloss <- mnLogLoss(data = data, lev = lev, model = model)
     
     # AUC stats
-    prob_stats <- lapply(levels(data[, "pred"]), function(x) {
-      obs <- ifelse(data[, "obs"] == x, 1, 0)
-      prob <- data[, x]
-      AUCs <- try(ModelMetrics::auc(obs, data[, x]), silent = TRUE)
+    prob_stats = map(levels(data[, "pred"]), function(x) {
+      AUCs <- try(ModelMetrics::auc(ifelse(data[, "obs"] == x, 1, 0), data[, x]), silent = TRUE)
       AUCs = max(AUCs, 1 - AUCs)
       return(AUCs)
     })
-    roc_stats <- c("AUC" = mean(unlist(prob_stats)), 
-                   "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
+    roc_stats = c("AUC" = mean(unlist(prob_stats)), 
+                  "Weighted_AUC" = sum(unlist(prob_stats) * table(data$obs)/nrow(data)))
     
     # Confusion matrix stats
-    CM <- confusionMatrix(data[, "pred"], data[, "obs"])
-    class_stats <- CM$byClass
+    CM = confusionMatrix(data[, "pred"], data[, "obs"])
+    class_stats = CM$byClass
     if (!is.null(dim(class_stats))) class_stats = colMeans(class_stats)
     names(class_stats) <- paste0("Mean_", names(class_stats))
     
     # Collect metrics
     stats = c(roc_stats, CM$overall[c("Accuracy","Kappa")], lloss, class_stats)
-    names(stats) <- gsub("[[:blank:]]+", "_", names(stats))
+    names(stats) = gsub("[[:blank:]]+", "_", names(stats))
   } 
 
   ## Regression
@@ -906,7 +903,7 @@ get_plot_performance = function(yhat, y, reduce_factor = NULL, quantiles = seq(0
 
 
 ## Variable importance by permutation argument 
-get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, dmatrix = TRUE,
+get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = fit, sparse = TRUE,
                                      feature_names = features, target_name = "target",
                                      b_sample = NULL, b_all = NULL,
                                      vars = features,  metric = "AUC") {
@@ -915,12 +912,14 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   
   ## Original performance
   if (is.factor(df.for_varimp[[target_name]])) type = "prob" else type = "raw"
-  if (!dmatrix) {
-    yhat_unscaled = predict(fit.for_varimp, df.for_varimp[feature_names])
-  } else {
-    formula_tmp = as.formula(paste("~", paste(feature_names, collapse = " + "))) 
+  formula_tmp = as.formula(paste("~ -1 + ", paste(feature_names, collapse = " + "))) 
+  if (sparse) {
     yhat_unscaled = predict(fit.for_varimp, 
                             xgb.DMatrix(sparse.model.matrix(formula_tmp, data = df.for_varimp[feature_names])), 
+                            type = type)
+  } else {
+    yhat_unscaled = predict(fit.for_varimp, 
+                            xgb.DMatrix(model.matrix(formula_tmp, data = df.for_varimp[feature_names])), 
                             type = type)
   }
   perf_orig = mysummary(data.frame(y = df.for_varimp[[target_name]], 
@@ -932,17 +931,19 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
   i.permute = sample(1:nrow(df.for_varimp)) #permutation vector
   start = Sys.time()
   df.varimp = foreach(i = 1:length(vars), .combine = bind_rows, 
-                      .packages = c("caret","xgboost","Matrix","dplyr"), 
+                      .packages = c("caret","xgboost","Matrix","dplyr","purrr"), 
                       .export = c("mysummary","scale_pred")) %dopar% 
   { 
     #i=1
     df.tmp = df.for_varimp
     df.tmp[[vars[i]]] = df.tmp[[vars[i]]][i.permute] #permute
-    if (!dmatrix) {
-      yhat_unscaled = predict(fit.for_varimp, df.tmp[feature_names])
-    } else {
+    if (sparse) {
       yhat_unscaled = predict(fit.for_varimp, 
                               xgb.DMatrix(sparse.model.matrix(formula_tmp, data = df.tmp[feature_names])), 
+                              type = type)
+    } else {
+      yhat_unscaled = predict(fit.for_varimp, 
+                              xgb.DMatrix(model.matrix(formula_tmp, data = df.tmp[feature_names])), 
                               type = type)
     }
     perf = mysummary(data.frame(y = df.tmp[[target_name]], 
@@ -966,10 +967,10 @@ get_varimp_by_permutation = function(df.for_varimp = df.test, fit.for_varimp = f
 ## Get plot list for variable importance
 get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue","orange","red"), 
                            length_features = length(features),
-                           df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
+                           df.plot_cv = NULL, run_name = "run", cv_lines = TRUE, cv_CI = TRUE) {
   # Subset
   df.ggplot = df.plot %>% filter(variable %in% vars)
-  if (!is.null(df.plot_boot)) df.ggplot_boot = df.plot_boot %>% filter(variable %in% vars)
+  if (!is.null(df.plot_cv)) df.ggplot_cv = df.plot_cv %>% filter(variable %in% vars)
   
   # Importancve plot 
   p_imp = ggplot(df.ggplot) +
@@ -983,21 +984,21 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
     theme_my +    
     scale_y_continuous(breaks = seq(0,100,20))
  
-  # Add boostrap information
-  if (!is.null(df.plot_boot)) {
-    # Add bootstrap lines
-    if (bootstrap_lines == TRUE) {
+  # Add cv information
+  if (!is.null(df.plot_cv)) {
+    # Add cv lines
+    if (cv_lines == TRUE) {
       p_imp = p_imp +
-        geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
+        geom_line(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_cv, 
                   color = "grey", size = 0.1) +
-        geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_boot, 
+        geom_point(aes_string(x = "variable", y = "importance", group = run_name), data = df.ggplot_cv, 
                    color = "black", size = 0.3) 
     }
     
-    # Add bootstrap Confidence Intervals
-    if (bootstrap_CI == TRUE) {
+    # Add cv Confidence Intervals
+    if (cv_CI == TRUE) {
       # Calculate confidence intervals
-      df.help = df.ggplot_boot %>% 
+      df.help = df.ggplot_cv %>% 
         group_by(variable) %>% 
         summarise(sd = sd(importance)) %>% 
         left_join(select(df.ggplot, variable, importance)) %>% 
@@ -1027,7 +1028,7 @@ get_plot_varimp = function(df.plot = df.varimp, vars = topn_vars, col = c("blue"
 
 
 ## Partial dependance on green field
-get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, dmatrix = TRUE,
+get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit, sparse = TRUE,
                           feature_names = features, target_name = "target",
                           b_sample = NULL, b_all = NULL,
                           vars = topn_vars, l.levs, l.quantiles) {
@@ -1039,7 +1040,7 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
     
     # Some parameters
     if (is.factor(df.for_partialdep[[target_name]])) type = "prob" else type = "raw"
-    formula_tmp = as.formula(paste("~", paste(feature_names, collapse = " + "))) 
+    formula_tmp = as.formula(paste("~ -1 + ", paste(feature_names, collapse = " + "))) 
     
     # Initialize result set
     df.res = c()
@@ -1054,11 +1055,13 @@ get_partialdep = function(df.for_partialdep = df.test, fit.for_partialdep = fit,
       #value = values[1]
       print(value)
       df.tmp[1:nrow(df.tmp),vars[i]] = value #keep also original factor levels
-      if (!dmatrix) {
-        yhat_unscaled = predict(fit.for_partialdep, df.tmp[feature_names], type = type)
-      } else {
+      if (sparse) {
         yhat_unscaled = predict(fit.for_partialdep, 
                                 xgb.DMatrix(sparse.model.matrix(formula_tmp, data = df.tmp[feature_names])), 
+                                type = type)
+      } else {
+        yhat_unscaled = predict(fit.for_partialdep, 
+                                xgb.DMatrix(model.matrix(formula_tmp, data = df.tmp[feature_names])), 
                                 type = type)
       }
       # IMPORTANT: rescale before averaging
@@ -1083,7 +1086,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
                                df.for_partialdep = df.test, target_name = "target", 
                                ylim = NULL, colors = twocol, min_width = 0.2,
                                legend_only_in_1stplot = TRUE,
-                               df.plot_boot = NULL, run_name = "run", bootstrap_lines = TRUE, bootstrap_CI = TRUE) {
+                               df.plot_cv = NULL, run_name = "run", cv_lines = TRUE, cv_CI = TRUE) {
   
   #browser()
   
@@ -1124,12 +1127,12 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
     
     # Subset data
     df.ggplot = df.plot[df.plot$variable == .x,] 
-    if (!is.null(df.plot_boot)) df.ggplot_boot = df.plot_boot[df.plot_boot$variable == .x,]
+    if (!is.null(df.plot_cv)) df.ggplot_cv = df.plot_cv[df.plot_cv$variable == .x,]
     
     # Just take "Y"-class in non-multiclass case
     if (type == "class") {
       df.ggplot = df.ggplot %>% filter_(paste0(target_name," == '",levs_target[2],"'"))
-      if (!is.null(df.plot_boot)) df.ggplot_boot = df.ggplot_boot %>% 
+      if (!is.null(df.plot_cv)) df.ggplot_cv = df.ggplot_cv %>% 
                                       filter_(paste0(target_name," == '",levs_target[2],"'")) 
     }
 
@@ -1146,8 +1149,8 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       
       # Adapt value to .x
       df.ggplot[[.x]] = factor(as.character(df.ggplot$value), levels = levels(df.for_partialdep[[.x]])) 
-      if (!is.null(df.plot_boot)) df.ggplot_boot[[.x]] = 
-                      factor(as.character(df.ggplot_boot$value), levels = levels(df.for_partialdep[[.x]])) 
+      if (!is.null(df.plot_cv)) df.ggplot_cv[[.x]] = 
+                      factor(as.character(df.ggplot_cv$value), levels = levels(df.for_partialdep[[.x]])) 
       
       # Prepare data for plotting
       df.ggplot = df.ggplot %>% 
@@ -1157,7 +1160,7 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
         df.ggplot[[target_name]] = factor(as.character(df.ggplot[[target_name]]), levels = rev(levs_target))
       } else {
         df.ggplot[[target_name]] = "target"
-        if (!is.null(df.plot_boot)) df.ggplot_boot[[target_name]] = "target"
+        if (!is.null(df.plot_cv)) df.ggplot_cv[[target_name]] = "target"
       }
       
       #if (type == "class") df.hlp = df.ggplot #fix problem with missing combinations
@@ -1178,11 +1181,11 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
       
       # Adapt x
       df.ggplot[[.x]] = as.numeric(df.ggplot$value)
-      if (!is.null(df.plot_boot)) df.ggplot_boot[[.x]] = as.numeric(df.ggplot_boot$value)
+      if (!is.null(df.plot_cv)) df.ggplot_cv[[.x]] = as.numeric(df.ggplot_cv$value)
       
       if (type == "regr") {
         df.ggplot[[target_name]] = "target"
-        if (!is.null(df.plot_boot)) df.ggplot_boot[[target_name]] = "target"
+        if (!is.null(df.plot_cv)) df.ggplot_cv[[target_name]] = "target"
       }
 
       # For retrieving max y-axis value for rescaling density plot
@@ -1210,21 +1213,21 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
     }
     
     # Add boostrap information
-    if (!is.null(df.plot_boot)) {
+    if (!is.null(df.plot_cv)) {
       
-      if (type != "regr") df.ggplot_boot[[target_name]] = factor(as.character(df.ggplot_boot[[target_name]]), 
+      if (type != "regr") df.ggplot_cv[[target_name]] = factor(as.character(df.ggplot_cv[[target_name]]), 
                                                                  levels = levs_target)
       # Needed to group lines
-      df.ggplot_boot$group = interaction(df.ggplot_boot[[run_name]], df.ggplot_boot[[target_name]] )
+      df.ggplot_cv$group = interaction(df.ggplot_cv[[run_name]], df.ggplot_cv[[target_name]] )
       
       if (type == "multiclass" & is.factor(df.for_partialdep[[.x]])) {
-        df.ggplot_boot = df.ggplot_boot %>% group_by_(.x, "run") %>% mutate(yhat = cumsum(yhat))
+        df.ggplot_cv = df.ggplot_cv %>% group_by_(.x, "run") %>% mutate(yhat = cumsum(yhat))
       }
       
-      # Add bootstrap lines
-      if (bootstrap_lines == TRUE) {
+      # Add cv lines
+      if (cv_lines == TRUE) {
         p = p +
-          geom_line(aes_string(x = .x, y = "yhat", color = target_name, group = "group"), data = df.ggplot_boot, 
+          geom_line(aes_string(x = .x, y = "yhat", color = target_name, group = "group"), data = df.ggplot_cv, 
                     linetype = 3, 
                     #size = 0.1, alpha = 0.2, 
                     show.legend = FALSE) +
@@ -1233,11 +1236,11 @@ get_plot_partialdep = function(df.plot = df.partialdep, vars = topn_vars,
           #geom_point(aes_string(y = "yhat", group = run_name)) #plot red dots again
       }
       
-      # Add bootstrap Confidence Intervals
-      if (bootstrap_CI == TRUE) {
+      # Add cv Confidence Intervals
+      if (cv_CI == TRUE) {
         
         # Calculate confidence intervals
-        df.help = df.ggplot_boot %>% 
+        df.help = df.ggplot_cv %>% 
           group_by_(.x, target_name) %>% 
           summarise(sd = sd(yhat)) %>% 
           left_join(select_(df.ggplot, .x, "yhat", target_name)) 
@@ -1298,70 +1301,14 @@ explainPredictions = function (xgb.model, explainer, data)
   return(preds_breakdown)
 }
 
-get_explanations_old = function(fit.for_explain = fit,
-                            b_sample = NULL, b_all = NULL,
-                            df.train_explain = df.train[features], 
-                            df.test_explain = df.test[i.explain, c("id", features)],
-                            preds = yhat_explain[i.explain],
-                            id_name = "id", feature_names = features, formula = formula_rightside,
-                            type = "class") {
-  #browser()
-  
-  # Get model matrix and DMatrix for train and test (sample) data
-  m.train = sparse.model.matrix(formula, data = df.train_explain[feature_names])
-  DM.train = xgb.DMatrix(m.train) 
-  m.test_explain = sparse.model.matrix(formula, data = df.test_explain[feature_names])
-  DM.test_explain = xgb.DMatrix(m.test_explain)
-  
-  
-  ## Create explainer data table from train data
-  if (type == "class") {
-    df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "binary")
-    
-    # Switch coefficients (as explainer takes "N" as target = 1)
-    cols = setdiff(colnames(df.explainer), c("leaf","tree"))
-    df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
-  } else {
-    df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "regression")
-  }
-  
-  browser()
-  ## Get explanations for predictions of test data
-  df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, DM.test_explain)
-  if (type == "class") {
-    tmp = inv.logit(df.predictions$intercept)
-    df.predictions$intercept = logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
-  }
-  
-  # Aggregate predictions for all nominal variables
-  df.predictions = as.data.frame(df.predictions)
-  df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train_explain[1,feature_names]), "assign")],
-                      levname = setdiff(colnames(m.train),"(Intercept)"))
-  for (i in 1:length(nomi)) {
-    #i=1
-    varname = nomi[i]
-    levnames = as.character(df.map[df.map$varname == varname,]$levname)
-    df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
-    df.predictions[levnames] = NULL
-  }
-  
-  # Check
-  if (type == "class") left = inv.logit(rowSums(df.predictions)) else left = rowSums(df.predictions)
-  if (all.equal(left, preds, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
-    print("Predictions and explanations DO NOT map!!!")
-  
-  df.predictions$id = df.test_explain$id 
-  df.predictions
-}
-# 
-# get_explanations = function(fit.for_explain = fit,
+# get_explanations_old = function(fit.for_explain = fit,
 #                             b_sample = NULL, b_all = NULL,
 #                             df.train_explain = df.train[features], 
 #                             df.test_explain = df.test[i.explain, c("id", features)],
 #                             preds = yhat_explain[i.explain],
 #                             id_name = "id", feature_names = features, formula = formula_rightside,
 #                             type = "class") {
-#   browser()
+#   #browser()
 #   
 #   # Get model matrix and DMatrix for train and test (sample) data
 #   m.train = sparse.model.matrix(formula, data = df.train_explain[feature_names])
@@ -1370,111 +1317,60 @@ get_explanations_old = function(fit.for_explain = fit,
 #   DM.test_explain = xgb.DMatrix(m.test_explain)
 #   
 #   
-#   
 #   ## Create explainer data table from train data
-#   
-#   # Get trees and add lp (linear predictor) info
-#   df.trees = xgb.model.dt.tree(attr(m.train, "Dimnames")[[2]], fit.for_explain$finalModel) %>% 
-#     as.data.frame()%>% 
-#     #left_join(df.nodes_train, by = c("Tree" = "tree", "Node" = "leaf")) %>% 
-#     #select(-Cover) %>% mutate(Cover=n) %>% 
-#     mutate(lp_per_cover = ifelse(Feature == "Leaf", Quality, NA),
-#            lp = lp_per_cover * Cover)
-#   
-#   # Convert Yes/No branches to real parent-child
-#   df.parent_child = bind_rows(df.trees %>% select(-No) %>% rename("ID_child" = "Yes") %>% filter(Feature != "Leaf"),
-#                               df.trees %>% select(-Yes) %>% rename("ID_child" = "No")) %>% 
-#     arrange(Tree, Node, ID)
-#   
-#   # Sceleton for appending
-#   df.explain = c()
-#   
-#   # Set df.leaves for first iteration
-#   df.leaves = df.parent_child %>% filter(Feature == "Leaf") %>% 
-#     mutate(count_leaf = 1) %>% 
-#     select(Tree, Node, ID_child = ID, Cover_leaf = Cover, lp_leaf = lp, lp_per_cover_child = lp_per_cover, count_leaf)
-#   
-#   ## Loop from here ...
-#   while(TRUE) {
-#     df.split = df.leaves %>% 
-#       left_join(df.parent_child %>% select(ID, ID_child, Feature)) %>% #add next level to all leaves
-#       group_by(Tree, ID) %>% mutate(Cover_parent = sum(Cover_leaf), lp_parent = sum(lp_leaf), 
-#                                     count = n()) %>% ungroup() %>% 
-#       mutate(lp_per_cover_parent = lp_parent/Cover_parent,
-#              weight = lp_per_cover_child - lp_per_cover_parent) %>% 
-#       mutate(ID = ifelse(count == count_leaf, ID_child, ID)) %>% 
-#       mutate(count_leaf = count) %>% 
-#       filter(!is.na(ID))
+#   if (type == "class") {
+#     df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "binary")
 #     
-#     df.explain = bind_rows(df.explain, 
-#                            df.split %>% select(Tree, Node, Feature, weight),
-#                            df.split %>% filter(str_split(ID, "-", simplify = TRUE)[,2] == 0) %>% 
-#                              mutate(Feature = "intercept", weight = lp_per_cover_parent) %>% 
-#                              select(Tree, Node, Feature, weight))
-#     
-#     df.leaves = df.split %>% 
-#       select(Tree, Node, ID_child = ID, Cover_leaf, lp_leaf, lp_per_cover_child = lp_per_cover_parent, count_leaf) %>% 
-#       filter(str_split(ID_child, "-", simplify = TRUE)[,2] != 0)
-#     
-#     if(nrow(df.leaves) == 0) break
+#     # Switch coefficients (as explainer takes "N" as target = 1)
+#     cols = setdiff(colnames(df.explainer), c("leaf","tree"))
+#     df.explainer[, (cols) := lapply(.SD, function(x) -x), .SDcols = cols]
+#   } else {
+#     df.explainer = buildExplainer(fit.for_explain$finalModel, DM.train, type = "regression")
 #   }
 #   
-#   # Aggregate
-#   df.explain = df.explain %>% group_by(Tree, Node, Feature) %>% summarise(weight = sum(weight))
-#   
-#   
-#   
+#   browser()
 #   ## Get explanations for predictions of test data
-#   df.predictions = as.data.frame(predict(fit.for_explain$finalModel, DM.test_explain, predleaf = TRUE)) %>% 
-#     mutate(id = i.explain) %>% 
-#     gather(key = tree, value = leaf, -id) %>% 
-#     mutate(tree = as.numeric(substring(tree,2)) - 1) %>% 
-#     left_join(df.explain, by = c("tree" = "Tree", "leaf" = "Node")) %>% 
-#     group_by(id, Feature) %>% 
-#     summarise(weight = sum(weight))
-#   
-#   if (type %in% c("class", "multiclass")) {
-#     # Switch coefficients (as explainer takes "N" as target = 1)
-#     df.predictions$weight = -df.predictions$weight
-#     
-#     # Rescale intercept due to undersampling
-#     i.intercept = which(df.predictions$Feature == "intercept")
-#     tmp = inv.logit(df.predictions$weight[i.intercept])
-#     intercept_new =  logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
-#     df.predictions[i.intercept, "weight"] = intercept_new
+#   df.predictions = explainPredictions(fit.for_explain$finalModel, df.explainer, DM.test_explain)
+#   if (type == "class") {
+#     tmp = inv.logit(df.predictions$intercept)
+#     df.predictions$intercept = logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
 #   }
 #   
 #   # Aggregate predictions for all nominal variables
+#   df.predictions = as.data.frame(df.predictions)
 #   df.map = data.frame(varname = features[attr(model.matrix(formula, data = df.train_explain[1,feature_names]), "assign")],
-#                       levname = setdiff(colnames(m.train),"(Intercept)"), stringsAsFactors = FALSE)
-#   df.predictions = df.predictions %>% left_join(df.map, by = c("Feature" = "levname"))
-# 
+#                       levname = setdiff(colnames(m.train),"(Intercept)"))
+#   for (i in 1:length(nomi)) {
+#     #i=1
+#     varname = nomi[i]
+#     levnames = as.character(df.map[df.map$varname == varname,]$levname)
+#     df.predictions[varname] = apply(df.predictions[levnames], 1, function(x) sum(x, na.rm = TRUE))
+#     df.predictions[levnames] = NULL
+#   }
 #   
 #   # Check
-#   df.check = df.predictions %>% group_by(id) %>% summarise(weight = sum(weight)) %>% mutate(yhat = yhat_explain[.$id])
-#   if (type %in% c("class", "multiclass")) df.check$weight = inv.logit(df.check$weight)
-#   if (all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
+#   if (type == "class") left = inv.logit(rowSums(df.predictions)) else left = rowSums(df.predictions)
+#   if (all.equal(left, preds, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else 
 #     print("Predictions and explanations DO NOT map!!!")
 #   
+#   df.predictions$id = df.test_explain$id 
 #   df.predictions
 # }
 
-
 ## Create explainer data frame from train data
-get_explainer = function(fit.for_explain = fit, 
+get_explainer = function(fit.for_explain = fit,
                          m.train_for_explain = m.train,
                          feature_names = features) {
   #browser()
   
   # Create mapping table for Feature to variable
-  df.map = data.frame(Feature = as.character(c(1:dim(m.train_for_explain)[2]) -1),
-                      levname = colnames(m.train_for_explain),
+  df.map = data.frame(levname = colnames(m.train_for_explain),
                       variable = feature_names[attr(m.train_for_explain, "assign")],
                       stringsAsFactors = FALSE) %>% 
-    bind_rows(data.frame(Feature = "intercept", levname = "intercept", variable = "intercept", stringsAsFactors = FALSE ))
+    bind_rows(data.frame(levname = "intercept", variable = "intercept", stringsAsFactors = FALSE ))
   
   # Get trees and add lp (linear predictor) info
-  df.trees = xgb.model.dt.tree(attr(m.train, "Dimnames")[[2]], fit.for_explain$finalModel) %>% 
+  df.trees = xgb.model.dt.tree(attr(m.train_for_explain, "Dimnames")[[2]], fit.for_explain$finalModel) %>% 
     as.data.frame()%>% 
     mutate(lp_per_cover = ifelse(Feature == "Leaf", Quality, NA),
            lp = lp_per_cover * Cover)
@@ -1523,7 +1419,7 @@ get_explainer = function(fit.for_explain = fit,
   
   # Aggregate over Feature names and return
   df.explainer %>% 
-    left_join(df.map) %>% #add original variable name
+    left_join(df.map, by = c("Feature" = "levname")) %>% #add original variable name
     group_by(Tree, Node, variable) %>% summarise(weight = sum(weight))
 }  
 
@@ -1531,6 +1427,7 @@ get_explainer = function(fit.for_explain = fit,
 ## Get explanations for some predictions from explainer data
 get_explanations = function(fit.for_explain = fit,
                             feature_names = features,
+                            target_name = "target",
                             df.test_explain,
                             id_name = "id",
                             yhat_explain,
@@ -1539,36 +1436,74 @@ get_explanations = function(fit.for_explain = fit,
                             rounding = 2) {
   
   #browser()
+  # Check for target scale
+  levs = fit.for_explain$levels #also needed later
+  length_levs = length(fit.for_explain$levels)
+  target_type = switch(as.character(length_levs), 
+                       "1" = "regr", "2" = "class", "multiclass")
+
+  
   
   ## Get explanations for predictions of test data
-  m.test_explain = model.matrix(as.formula(paste("~ -1 + ", paste(feature_names, collapse = " + "))),
-                                df.test_explain[feature_names], sparse = TRUE)
+  m.test_explain = sparse.model.matrix(as.formula(paste("~ -1 + ", paste(feature_names, collapse = " + "))),
+                                df.test_explain[feature_names])
   df.weights = predict(fit.for_explain$finalModel, xgb.DMatrix(m.test_explain), predleaf = TRUE) %>%
     as.data.frame() %>% 
-    mutate_(.dots = setNames(list("1:nrow(.)", "df.test_explain[[id_name]]"), c("row_number",id_name))) %>% 
+    mutate_(.dots = setNames(list("1:nrow(.)", paste0("df.test_explain$",id_name)), c("row_number",id_name))) %>% 
     gather_(key = "tree", value = "leaf", gather_cols = setdiff(colnames(.), c("row_number", id_name))) %>% 
     mutate(tree = as.numeric(substring(tree,2)) - 1) %>%
-    left_join(df.explainer, by = c("tree" = "Tree", "leaf" = "Node")) %>%
-    group_by_("row_number", id_name, "variable") %>%
-    summarise(weight = sum(weight))
+    left_join(df.explainer, by = c("tree" = "Tree", "leaf" = "Node")) 
   
-  if (fit.for_explain$modelType == "Classification") {
+  if (target_type == "multiclass") {
+    df.weights = df.weights %>% mutate(target = levs[1 + tree%%length_levs]) 
+  } else df.weights$target = levs[2]
+  
+  df.weights = df.weights %>% 
+    group_by_("target", "row_number", id_name, "variable") %>% summarise(weight = sum(weight)) 
+  
+  #  group_by(row_number) %>% mutate(weight = exp(weight)/sum(exp(weight)))
+
+  if (target_type %in% c("class","multiclass")) {
     # Switch coefficients (as explainer takes "N" as target = 1)
-    df.weights$weight = -df.weights$weight
+    if (target_type == "class") df.weights$weight = -df.weights$weight
     
     # Rescale intercept due to undersampling
-    i.intercept = which(df.weights$variable == "intercept")
-    tmp = inv.logit(df.weights$weight[i.intercept])
-    intercept_new =  logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
-    df.weights[i.intercept, "weight"] = intercept_new
+    if (target_type == "class") {
+      i.intercept = which(df.weights$variable == "intercept")
+      tmp = inv.logit(df.weights$weight[i.intercept])
+      intercept_new =  logit(scale_pred(data.frame(N = 1-tmp, Y = tmp), b_sample, b_all)[,2])
+      df.weights[i.intercept, "weight"] = intercept_new
+    } 
+    if (target_type == "multiclass") {
+      denom = sum(exp(unique(df.weights %>% filter(variable == "intercept") %>% .$weight)))
+      for (i in 1:length_levs) {
+        i.intercept = which(df.weights$target == levs[i] & df.weights$variable == "intercept")
+        tmp = exp(df.weights$weight[i.intercept]) / denom
+        intercept_new = log(scale_pred(data.frame(N = 1-tmp, Y = tmp), 
+                                         c(1-b_sample[i], b_sample[i]), c(1-b_all[i], b_all[i]))[,2])
+        df.weights[i.intercept, "weight"] = intercept_new
+      }
+    }
   }
   
   # Check
-  df.check = df.weights %>% group_by(row_number) %>% summarise(weight = sum(weight)) %>% 
-    mutate(yhat = yhat_explain)
-  if (fit.for_explain$modelType == "Classification") df.check$weight = inv.logit(df.check$weight)
-  if (all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5) == TRUE) print("Predictions and explanations map") else
+  df.check = df.weights %>% group_by(target, row_number) %>% summarise(weight = sum(weight))
+  if (target_type == "multiclass") {
+    df.check = df.check %>% 
+      group_by(row_number) %>% mutate(weight = exp(weight)/sum(exp(weight))) %>% 
+      left_join(yhat_explain %>% mutate(row_number = 1:nrow(.)) %>% gather(key = target, value = yhat, -row_number))
+  } else if(target_type == "class") {
+    df.check$weight = inv.logit(df.check$weight)
+    df.check$yhat = yhat_explain
+  } else {
+    df.check$yhat = yhat_explain
+  }
+  if (all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5) == TRUE) {
+    print("Predictions and explanations map") 
+  } else {
     print("Predictions and explanations DO NOT map!!!")
+    print(all.equal(df.check$weight, df.check$yhat, tolerance = 1e-5))
+  }
   
   # Add values
   df.values = df.test_explain[c(id_name,feature_names)]
@@ -1585,7 +1520,7 @@ get_explanations = function(fit.for_explain = fit,
 
 ## Get plot list for xgboost explainer
 get_plot_explanations = function(df.plot = df.explanations,  
-                                 id_name = "id", type = "class", ylim = c(0.01, 0.99), 
+                                 id_name = "id", scale_target = "class", ylim = c(0.01, 0.99), 
                                  fillcol = alpha(c("red","darkgreen"), 0.5),
                                  threshold = NULL, topn = NULL,
                                  add_to_title = NULL) {
@@ -1633,7 +1568,7 @@ get_plot_explanations = function(df.plot = df.explanations,
       labs(title = title) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1),
             plot.title = element_text(hjust = 0.5)) 
-    if (type == "class") {
+    if (scale_target %in% c("class","multiclass")) {
       p = p + 
         scale_y_continuous(labels = plogis, breaks = qlogis(seq(0, 100, 2)/100)) #, limits = qlogis(ylim)) 
     } else {
@@ -2238,13 +2173,14 @@ xgb$loop = function(grid) {
 }
 
 xgb$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
-  if (!inherits(x, "xgb.DMatrix")) 
-    x <- as.matrix(x)
+  #browser()
+  # if (!inherits(x, "xgb.DMatrix")) 
+  #   x <- as.matrix(x)
   if (is.factor(y)) {
     if (length(lev) == 2) {
       y <- ifelse(y == lev[1], 1, 0)
       if (!inherits(x, "xgb.DMatrix")) 
-        x <- xgboost::xgb.DMatrix(x, label = y, missing = NA)
+        x <- xgboost::xgb.DMatrix(x, label = y)
       else xgboost::setinfo(x, "label", y)
       if (!is.null(wts)) 
         xgboost::setinfo(x, "weight", wts)
@@ -2258,7 +2194,7 @@ xgb$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
     else {
       y <- as.numeric(y) - 1
       if (!inherits(x, "xgb.DMatrix")) 
-        x <- xgboost::xgb.DMatrix(x, label = y, missing = NA)
+        x <- xgboost::xgb.DMatrix(x, label = y)
       else xgboost::setinfo(x, "label", y)
       if (!is.null(wts)) 
         xgboost::setinfo(x, "weight", wts)
@@ -2272,7 +2208,7 @@ xgb$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
   }
   else {
     if (!inherits(x, "xgb.DMatrix")) 
-      x <- xgboost::xgb.DMatrix(x, label = y, missing = NA)
+      x <- xgboost::xgb.DMatrix(x, label = y)
     else xgboost::setinfo(x, "label", y)
     if (!is.null(wts)) 
       xgboost::setinfo(x, "weight", wts)
@@ -2288,8 +2224,8 @@ xgb$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
 
 xgb$predict = function(modelFit, newdata, submodels = NULL) {
   if (!inherits(newdata, "xgb.DMatrix")) {
-    newdata <- as.matrix(newdata)
-    newdata <- xgboost::xgb.DMatrix(data = newdata, missing = NA)
+    #newdata <- as.matrix(newdata)
+    newdata <- xgboost::xgb.DMatrix(data = newdata)
   }
   out <- predict(modelFit, newdata)
   if (modelFit$problemType == "Classification") {
@@ -2330,8 +2266,8 @@ xgb$predict = function(modelFit, newdata, submodels = NULL) {
 
 xgb$prob = function(modelFit, newdata, submodels = NULL) {
   if (!inherits(newdata, "xgb.DMatrix")) {
-    newdata <- as.matrix(newdata)
-    newdata <- xgboost::xgb.DMatrix(data = newdata, missing = NA)
+    #newdata <- as.matrix(newdata)
+    newdata <- xgboost::xgb.DMatrix(data = newdata)
   }
   if (!is.null(modelFit$param$objective) && modelFit$param$objective == 
       "binary:logitraw") {
@@ -2420,9 +2356,9 @@ deepLearn$parameters =
              text = "parameter,class,label
              size,character,Layer shape
              lambda,numeric,L2 L2 Regularization
+             dropout,numeric,Dropout Rate
              batch_size,numeric,Batch Size
              lr,numeric,Learning Rate
-             dropout,numeric,Dropout Rate
              batch_normalization,boolean,Batch Normalization
              activation,character,Activation Function
              epochs,numeric,Epochs"
@@ -2465,7 +2401,7 @@ deepLearn$fit = function(x, y, wts, param, lev, last, classProbs, ...) {
     x <- as.matrix(x)
   model <- keras::keras_model_sequential()
   
-  size = as.numeric(str_split(param$size,"_",simplify = TRUE)[1,])
+  size = as.numeric(str_split(param$size,"-",simplify = TRUE)[1,])
   
   for (i in 1:length(size)) {
     model %>% keras::layer_dense(units = size[i], activation = as.character(param$activation), 
