@@ -300,13 +300,11 @@ get_plot_distr_metr = function(df.plot = df, vars = metr, target_name = "target"
   
   ## Regression
   if (is.numeric(df.plot[[target_name]])) {
-    df.plot$dummy = "dummy"
-    
+
     # Loop over vars
     plots = map(vars, ~ {
       #.x = vars[1]
       print(.x)
-      
       # Scatterplot
       p = ggplot(data = df.plot, aes_string(x = .x, y = target_name)) +
         geom_hex() + 
@@ -326,7 +324,7 @@ get_plot_distr_metr = function(df.plot = df, vars = metr, target_name = "target"
         theme_void()
       
       # Inner Boxplot
-      p.innerinner = ggplot(data = df.plot, aes_string(x = "dummy", y = .x)) +
+      p.innerinner = ggplot(data = df.plot, aes_string(x = "''", y = .x)) +
         geom_boxplot() +
         coord_flip() +
         theme_void()
@@ -1376,8 +1374,8 @@ get_explainer = function(fit.for_explain = fit,
            lp = lp_per_cover * Cover)
   
   # Convert Yes/No branches to real parent-child
-  df.parent_child = bind_rows(df.trees %>% select(-No) %>% rename("ID_child" = "Yes") %>% filter(Feature != "Leaf"),
-                              df.trees %>% select(-Yes) %>% rename("ID_child" = "No")) %>% 
+  df.parent_child = bind_rows(df.trees %>% select(-No) %>% rename(ID_child = Yes) %>% filter(Feature != "Leaf"),
+                              df.trees %>% select(-Yes) %>% rename(ID_child = No)) %>% 
     arrange(Tree, Node, ID)
   
   # Sceleton for appending
@@ -1449,7 +1447,7 @@ get_explanations = function(fit.for_explain = fit,
                                 df.test_explain[feature_names])
   df.weights = predict(fit.for_explain$finalModel, xgb.DMatrix(m.test_explain), predleaf = TRUE) %>%
     as.data.frame() %>% 
-    mutate_(.dots = setNames(list("1:nrow(.)", paste0("df.test_explain$",id_name)), c("row_number",id_name))) %>% 
+    mutate_(.dots = setNames(list("row_number()", paste0("df.test_explain$",id_name)), c("row_number",id_name))) %>% 
     gather_(key = "tree", value = "leaf", gather_cols = setdiff(colnames(.), c("row_number", id_name))) %>% 
     mutate(tree = as.numeric(substring(tree,2)) - 1) %>%
     left_join(df.explainer, by = c("tree" = "Tree", "leaf" = "Node")) 
@@ -1520,10 +1518,10 @@ get_explanations = function(fit.for_explain = fit,
 
 ## Get plot list for xgboost explainer
 get_plot_explanations = function(df.plot = df.explanations,  
+                                 df.title = df.test_explain,
                                  id_name = "id", scale_target = "class", ylim = c(0.01, 0.99), 
-                                 fillcol = alpha(c("red","darkgreen"), 0.5),
-                                 threshold = NULL, topn = NULL,
-                                 add_to_title = NULL) {
+                                 fillcol = alpha(c("blue","red"), 0.5),
+                                 threshold = NULL, topn = NULL) {
   
   #browser()
   
@@ -1558,8 +1556,7 @@ get_plot_explanations = function(df.plot = df.explanations,
     print(ids[.x])
     
     df.waterfall = df.ggplot[df.ggplot[[id_name]] == ids[.x],] 
-    title = paste0(id_name, " = ", ids[.x])
-    if (!is.null(add_to_title)) title = paste0(title, add_to_title[.x])
+    title = df.title[df.title[[id_name]] == ids[.x],"title"]
     p = waterfall(values = df.waterfall$weight, rect_text_labels = round(df.waterfall$weight, 2), 
                   labels = df.waterfall$variableandvalue, total_rect_text = round(sum(df.waterfall$weight), 2),
                   fill_by_sign = FALSE,

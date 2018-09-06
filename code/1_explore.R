@@ -1,8 +1,8 @@
 
 # Set target type -> REMOVE AND ADAPT AT APPROPRIATE LOCATION FOR A USE-CASE
 rm(list = ls())
-TYPE = "CLASS"
-#TYPE = "REGR"
+#TYPE = "CLASS"
+TYPE = "REGR"
 #TYPE = "MULTICLASS"
 
 #######################################################################################################################-
@@ -15,7 +15,7 @@ source("./code/0_init.R")
 # Adapt some default parameter different for target types -> probably also different for a new use-case
 color = switch(TYPE, "CLASS" = twocol, "REGR" = hexcol, "MULTICLASS" = threecol) #probably need to change MULTICLASS opt
 cutoff = switch(TYPE, "CLASS" = 0.1, "REGR"  = 0.9, "MULTICLASS" = 0.9) #need to adapt
-ylim = switch(TYPE, "CLASS" = NULL, "REGR"  = c(0,2.5e5), "MULTICLASS" = NULL) #need to adapt in regression case
+ylim = switch(TYPE, "CLASS" = NULL, "REGR"  = c(0,2.5e2), "MULTICLASS" = NULL) #need to adapt in regression case
 min_width = switch(TYPE, "CLASS" = 0, "REGR"  = 0, "MULTICLASS" = 0.2) #need to adapt in multiclass case
 
 
@@ -185,8 +185,8 @@ summary(df[metr])
 plot = get_plot_corr(df, input_type = "metr", vars = metr, missinfo = misspct, cutoff = cutoff)
 ggsave(paste0(plotloc, TYPE, "_corr_metr.pdf"), plot, width = 9, height = 9)
 remove = c("xxx") #put at xxx the variables to remove
-metr = setdiff(metr, c("xxx")) #remove
-metr_binned = setdiff(metr_binned, paste0(c("xxx"),"_BINNED_")) #keep "binned" version in sync
+metr = setdiff(metr, remove) #remove
+metr_binned = setdiff(metr_binned, paste0(remove,"_BINNED_")) #keep "binned" version in sync
 
 
 

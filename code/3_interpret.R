@@ -3,7 +3,7 @@
 rm(list = ls())
 TYPE = "CLASS"
 #TYPE = "REGR"
-#TYPE = "MULTICLASS"
+TYPE = "MULTICLASS"
 
 
 
@@ -180,26 +180,32 @@ yhat_explain = scale_pred(predict(fit, xgb.DMatrix(sparse.model.matrix(formula, 
                           b_sample, b_all)
 if (TYPE == "CLASS") yhat_explain = yhat_explain[,2]
 
+
+
 ## Get explanations
 df.explanations = get_explanations(fit.for_explain = fit, feature_names = features,
                                    df.test_explain = df.test_explain, id_name = id_name, yhat_explain = yhat_explain,
                                    df.explainer = df.explainer,
                                    b_sample = b_sample, b_all = b_all)
 
-# Add yhat and for Multiclass target take only explanations for target (and not other levels)
-df.explanations = df.explanations %>% inner_join(df.test_explain %>% select_("target",id_name, "yhat"))
+# For Multiclass target take only explanations for target (and not other levels)
+if (TYPE == "multiclass") {
+  df.explanations = df.explanations %>% inner_join(df.test_explain %>% select_("target", id_name, "yhat"))
+}
+
 
 
 ## Plot
+# Create titles
+df.title = df.test_explain %>% select_("target", id_name, "yhat") %>% 
+  mutate(title = paste0(" (y = ",target,", ","y_hat = ", round(yhat, 2), ")"))
+
 plots = get_plot_explanations(df.plot = df.explanations,
+                              df.title = df.title,
                               id_name = id_name,
-                              scale_target = tolower(TYPE), topn = topn, ylim = ylim_expl,
-                              add_to_title = paste0(" (y = ",df.test_explain$target,", ",
-                                                    "y_hat = ", round(df.test_explain$yhat, 2), ")"))
+                              scale_target = tolower(TYPE), topn = topn, ylim = ylim_expl)
 ggsave(paste0(plotloc,TYPE,"_fails.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2),
        w = 18, h = 12)
-
-
 
 
 
@@ -392,17 +398,24 @@ df.explanations = get_explanations(fit.for_explain = fit, feature_names = featur
                                    df.explainer = df.explainer,
                                    b_sample = b_sample, b_all = b_all)
 
-# Add yhat and for Multiclass target take only explanations for target (and not other levels)
-df.explanations = df.explanations %>% inner_join(df.test_explain %>% select_("target",id_name, "yhat"))
+# For Multiclass target take only explanations for target (and not other levels)
+if (TYPE == "multiclass") {
+  df.explanations = df.explanations %>% inner_join(df.test_explain %>% select_("target", id_name, "yhat"))
+}
+
+# Create titles
+df.title = df.test_explain %>% select_("target", id_name, "yhat") %>% 
+  mutate(title = paste0(" (y = ",target,", ","y_hat = ", round(yhat, 2), ")"))
 
 # Plot
 plots = get_plot_explanations(df.plot = df.explanations,
+                              df.title = df.title,
                               id_name = id_name,
-                              scale_target = tolower(TYPE), topn = topn, ylim = ylim_expl,
-                              add_to_title = paste0(" (y = ",df.test_explain$target,", ",
-                                                    "y_hat = ", round(df.test_explain$yhat, 2), ")"))
+                              scale_target = tolower(TYPE), topn = topn, ylim = ylim_expl)
 ggsave(paste0(plotloc,TYPE,"_explanations.pdf"), marrangeGrob(plots, ncol = 2, nrow = 2), 
        w = 18, h = 12)
+
+
 
 
 
